@@ -117,17 +117,27 @@ docker compose exec bot python -c "import sqlite3,shutil; shutil.copy('/data/bot
 `/start` — витрина, `/order` — статус, `/imei` — где найти номер,
 `/help` — помощь, `/forget` — удалить свои заказы и IMEI из базы.
 
-## Разработка
+## Запуск без Docker
+
+Пригодится, чтобы посмотреть проект на своей машине. `.env` читается
+автоматически из корня проекта; переменные окружения, заданные снаружи, важнее файла.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-python tools/preview.py            # http://127.0.0.1:8099 — UI без Telegram
+python tools/preview.py            # http://127.0.0.1:8099 — UI без Telegram и токена
+python -m app.main                 # живой бот: нужен .env с BOT_TOKEN и SELLER_IDS
 python -m tests.smoke_test         # правила заказа + HTTP-API + подпись initData
 python -m tests.bot_test           # хэндлеры бота на фейковых апдейтах
 ```
 
+На Windows путь к интерпретатору — `.venv\Scripts\python.exe`.
+
 `preview.py` поднимает только веб-часть в режиме `demo`, вход без подписи,
 «сообщения в Telegram» печатаются в консоль. Токен не нужен.
+
+`python -m app.main` работает откуда угодно, включая домашний компьютер:
+бот забирает обновления сам (long polling), входящие порты и домен не нужны.
+С пустым `WEBAPP_URL` весь путь заказа проходит в переписке.
 
 ## Иконки приложений
 
