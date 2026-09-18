@@ -1,0 +1,19 @@
+{$DOMAIN} {
+	encode gzip zstd
+
+	header {
+		# Mini App грузится внутри Telegram — рамку разрешаем, остальное закрываем.
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	# Статика Mini App кэшируется коротко, чтобы правки в webapp/ подхватывались.
+	@assets path /static/*
+	header @assets Cache-Control "public, max-age=300"
+
+	reverse_proxy bot:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+}

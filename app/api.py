@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from aiohttp import web
+
+from . import auth, catalog, const, db, imei as imei_mod, texts
+from .config import Config
+from .service import OrderService, ServiceError
+
+log = logging.getLogger(__name__)
+routes = web.RouteTableDef()
+
+WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp"
+
+
+def cfg_of(request: web.Request) -> Config:
+    return request.app["cfg"]
+
+
+def service_of(request: web.Request) -> OrderService:
+    return request.app["service"]
+
+
+class ApiError(Exception):
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+async def current_user(request: web.Request) -> auth.WebAppUser:
+    cfg = cfg_of(request)
+    init_data = request.headers.get("X-Init-Data", "")
+
+    if not init_data and cfg.dev_mode:
+        dev_id = request.headers.get("X-Dev-User") or "1"
+        return auth.WebAppUser(id=int(dev_id), first_name="Dev", username="dev", language_code="ru")
+
+    try:
+        return auth.check_init_data(init_data, cfg.bot_token, cfg.init_data_ttl)
+    except auth.AuthError as exc:
+        raise ApiError("Не удалось подтвердить вход: %s" % exc, status=401)
+
+
+async def require_seller(request: web.Request) -> auth.WebAppUser:
+    user = await current_user(request)
+    if not cfg_of(request).is_seller(user.id):
+        raise ApiError("Недоступно", status=403)
+    return user
+
+
+async def body(request: web.Request) -> dict:
+    if not request.can_read_body:
+        return {}
+    try:
+        data = await request.json()
+    except Exception:
+        raise ApiError("Ожидался JSON")
+    return data if isinstance(data, dict) else {}
+
+
+async def with_user(order: dict | None) -> dict | None:
+    """db.get_order не джойнит пользователя — добираем имя для карточки продавца."""
+    if not order or "username" in order:
+        return order
+    user = await db.get_user(order["user_id"]) or {}
+    merged = dict(order)
+    merged["username"] = user.get("username")
+    merged["first_name"] = user.get("first_name")
+    return merged
+
+
+def order_public(order: dict | None, *, full_imei: bool = False) -> dict | None:
+    if not order:
+        return None
+    data = {
+        "id": order["id"],
+        "code": order["code"],
+        "status": order["status"],
+        "statusTitle": const.TITLES.get(order["status"], order["status"]),
+        "hint": texts.HINTS.get(order["status"], ""),
+        "step": const.STEP.get(order["status"], 0),
+        "price": order["price_rub"],
+        "priceText": texts.money(order["price_rub"]),
+        "paymentMode": order["payment_mode"],
+        "imeiMasked": imei_mod.mask(order.get("imei")),
+        "hasImei": bool(order.get("imei")),
+        "instruction": order.get("instruction"),
+        "note": order.get("seller_note"),
+        "createdAt": order["created_at"],
+        "updatedAt": order["updated_at"],
+        "isOpen": order["status"] in const.OPEN_STATUSES,
+    }
+    if full_imei:
+        data["imei"] = order.get("imei")
+        data["userId"] = order["user_id"]
+        data["username"] = order.get("username")
+        data["firstName"] = order.get("first_name")
+        data["paymentRef"] = order.get("payment_ref")
+    return data
+
+
+# ------------------------------------------------------------------ маршруты
+
+
+@routes.get("/health")
+async def health(request: web.Request) -> web.Response:
+    return web.json_response({"ok": True})
+
+
+@routes.get("/api/bootstrap")
+async def bootstrap(request: web.Request) -> web.Response:
+    cfg = cfg_of(request)
+    user = await current_user(request)
+    await db.upsert_user(user.id, user.username, user.first_name)
+    order = await db.get_active_order(user.id)
+
+    return web.json_response(
+        {
+            "user": {
+                "id": user.id,
+                "firstName": user.first_name,
+                "username": user.username,
+                "isSeller": cfg.is_seller(user.id),
+            },
+            "product": {
+                "title": cfg.product_title,
+                "subtitle": cfg.product_subtitle,
+                "price": cfg.price_rub,
+                "priceText": texts.money(cfg.price_rub),
+                "appsCount": catalog.count(),
+            },
+            "payment": {
+                "mode": cfg.payment_mode,
+                "details": cfg.payment_details,
+                "stars": cfg.price_stars,
+            },
+            "catalog": catalog.public_catalog(),
+            "categories": list(catalog.CATEGORIES),
+            "featured": list(catalog.FEATURED),
+            "steps": list(const.STEP_NAMES),
+            "support": cfg.support_username,
+            "privacy": texts.PRIVACY,
+            "testImei": imei_mod.TEST_IMEI if cfg.dev_mode else None,
+            "order": order_public(order),
+        }
+    )
+
+
+@routes.get("/api/order")
+async def get_order(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    order = await db.get_active_order(user.id)
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/create")
+async def create_order(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    await db.upsert_user(user.id, user.username, user.first_name)
+    order, _created = await service_of(request).get_or_create_order(user.id)
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/claim")
+async def claim(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    data = await body(request)
+    order = await service_of(request).claim_payment(int(data.get("orderId", 0)), user.id)
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/demopay")
+async def demopay(request: web.Request) -> web.Response:
+    cfg = cfg_of(request)
+    if cfg.payment_mode != "demo":
+        raise ApiError("Демо-оплата выключена")
+    user = await current_user(request)
+    data = await body(request)
+    order_id = int(data.get("orderId", 0))
+    order = await db.get_order(order_id)
+    if not order or order["user_id"] != user.id:
+        raise ApiError("Это не ваш заказ", status=403)
+    updated = await service_of(request).confirm_payment(order_id, "demo", ref="demo")
+    return web.json_response({"order": order_public(updated)})
+
+
+@routes.post("/api/order/invoice")
+async def invoice(request: web.Request) -> web.Response:
+    cfg = cfg_of(request)
+    if cfg.payment_mode != "stars":
+        raise ApiError("Оплата Stars выключена")
+    from .handlers import payments
+
+    user = await current_user(request)
+    data = await body(request)
+    order = await db.get_order(int(data.get("orderId", 0)))
+    if not order or order["user_id"] != user.id:
+        raise ApiError("Это не ваш заказ", status=403)
+    link = await payments.create_invoice_link(request.app["bot"], cfg, order)
+    return web.json_response({"link": link})
+
+
+@routes.post("/api/order/imei")
+async def submit_imei(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    data = await body(request)
+    order = await service_of(request).submit_imei(
+        int(data.get("orderId", 0)), str(data.get("imei", "")), user.id
+    )
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/cancel")
+async def cancel(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    data = await body(request)
+    order = await service_of(request).cancel(
+        int(data.get("orderId", 0)), "user:%d" % user.id, by_seller=False, actor_id=user.id
+    )
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/help")
+async def order_help(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    data = await body(request)
+    order = await db.get_order(int(data.get("orderId", 0)))
+    if not order or order["user_id"] != user.id:
+        raise ApiError("Это не ваш заказ", status=403)
+    await service_of(request).push_order_to_sellers(order, "🆘 <b>Покупатель просит помощь</b>")
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/order/imei/check")
+async def check_imei(request: web.Request) -> web.Response:
+    """Проверка номера до отправки — как «Проверить номер» на экране IMEI."""
+    await current_user(request)
+    data = await body(request)
+    value, error = imei_mod.validate(str(data.get("imei", "")))
+    return web.json_response({"valid": bool(value), "error": error, "masked": imei_mod.mask(value)})
+
+
+# ------------------------------------------------------------------ продавец
+
+
+@routes.get("/api/seller/orders")
+async def seller_orders(request: web.Request) -> web.Response:
+    await require_seller(request)
+    status = request.query.get("status") or "open"
+    query = (request.query.get("q") or "").strip() or None
+    # Поиск идёт по всем заказам: искать код внутри одного фильтра бессмысленно.
+    if query:
+        status = "all"
+    orders = await db.list_orders(status=None if status == "all" else status, query=query, limit=100)
+    counts = await db.status_counts()
+    return web.json_response(
+        {
+            "orders": [order_public(o, full_imei=True) for o in orders],
+            "counts": counts,
+            "titles": const.TITLES,
+        }
+    )
+
+
+@routes.post("/api/seller/action")
+async def seller_action(request: web.Request) -> web.Response:
+    user = await require_seller(request)
+    data = await body(request)
+    action = str(data.get("action", ""))
+    order_id = int(data.get("orderId", 0))
+    actor = "seller:%d" % user.id
+    svc = service_of(request)
+
+    if action == "payok":
+        order = await svc.confirm_payment(order_id, actor, ref=data.get("ref"))
+    elif action == "payno":
+        order = await svc.reject_payment(order_id, actor)
+    elif action == "installed":
+        order = await svc.mark_installed(order_id, actor)
+    elif action == "instruction":
+        order = await svc.send_instruction(order_id, str(data.get("text", "")), actor)
+    elif action == "cancel":
+        order = await svc.cancel(order_id, actor, by_seller=True)
+    elif action == "note":
+        await db.set_note(order_id, str(data.get("text", "")))
+        order = await db.get_order(order_id)
+    else:
+        raise ApiError("Неизвестное действие: %s" % action)
+
+    return web.json_response({"order": order_public(await with_user(order), full_imei=True)})
+
+
+# ------------------------------------------------------------------- статика
+
+
+@routes.get("/")
+async def index(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEBAPP_DIR / "index.html")
+
+
+@web.middleware
+async def error_middleware(request: web.Request, handler):
+    try:
+        return await handler(request)
+    except ApiError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=exc.status)
+    except ServiceError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=400)
+    except web.HTTPException:
+        raise
+    except Exception:
+        log.exception("Ошибка обработки %s", request.path)
+        return web.json_response({"ok": False, "error": "Внутренняя ошибка"}, status=500)
+
+
+def build_app(cfg: Config, bot, service: OrderService) -> web.Application:
+    app = web.Application(middlewares=[error_middleware])
+    app["cfg"] = cfg
+    app["bot"] = bot
+    app["service"] = service
+    app.add_routes(routes)
+    app.router.add_static("/static/", WEBAPP_DIR, name="static", show_index=False)
+    return app
