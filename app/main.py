@@ -8,7 +8,9 @@ import sqlite3
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
@@ -60,6 +62,71 @@ async def setup_profile(bot: Bot, cfg: Config) -> None:
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
+def mask_proxy(url: str) -> str:
+    """Прячет пароль прокси, чтобы он не утёк в логи."""
+    if "@" not in url:
+        return url
+    scheme, _, rest = url.partition("://")
+    creds, _, host = rest.rpartition("@")
+    user = creds.split(":", 1)[0]
+    return "%s://%s:***@%s" % (scheme, user, host) if user else "%s://***@%s" % (scheme, host)
+
+
+def make_bot(cfg: Config) -> Bot:
+    session = None
+    if cfg.telegram_proxy:
+        # Нужен aiohttp-socks — он в requirements.txt.
+        session = AiohttpSession(proxy=cfg.telegram_proxy)
+        log.info("Telegram через прокси %s", mask_proxy(cfg.telegram_proxy))
+    return Bot(
+        cfg.bot_token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+
+async def connect_telegram(bot: Bot, cfg: Config, attempts: int = 5):
+    """get_me с повторами: короткий обрыв сети не должен ронять весь сервис.
+
+    Ошибки прокси aiohttp-socks наследуются прямо от Exception и мимо
+    TelegramNetworkError, поэтому ловим широко — на старте всё равно все
+    варианты сводятся к «связи с Telegram нет».
+    """
+    delay = 3.0
+    last = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            return await bot.get_me()
+        except TelegramUnauthorizedError:
+            raise SystemExit(
+                "Telegram отклонил токен: проверьте BOT_TOKEN в .env "
+                "(взять заново: @BotFather → /mybots → API Token)."
+            )
+        except Exception as exc:
+            last = "%s: %s" % (type(exc).__name__, exc)
+            log.warning("Нет связи с Telegram, попытка %d из %d — %s", attempt, attempts, last)
+            if attempt < attempts:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
+
+    if cfg.telegram_proxy:
+        hint = (
+            "Прокси %s не пропустил запрос. Проверьте его с сервера:\n"
+            "  curl -4 -m 15 -x %s -o /dev/null -w '%%{http_code}\\n' https://api.telegram.org/\n"
+            "Вместо *** подставьте настоящий пароль. Любой код ответа (даже 404) "
+            "означает, что прокси рабочий; 000 — нет."
+            % (mask_proxy(cfg.telegram_proxy), mask_proxy(cfg.telegram_proxy))
+        )
+    else:
+        hint = (
+            "Проверьте с сервера: curl -4 -m 10 https://api.telegram.org/\n"
+            "Если ответа нет, хостинг блокирует Telegram — пропишите прокси в .env:\n"
+            "  TELEGRAM_PROXY=socks5://user:pass@host:port"
+        )
+
+    raise SystemExit("Не удалось связаться с api.telegram.org (%s).\n%s" % (last, hint))
+
+
 def build_dispatcher(cfg: Config, service: OrderService) -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     # Доступно во всех хэндлерах как аргументы cfg / service.
@@ -91,7 +158,7 @@ async def run() -> None:
             "том bot_data, а не папка с хоста." % (cfg.db_path, exc)
         )
 
-    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = make_bot(cfg)
     service = OrderService(bot, cfg)
     dp = build_dispatcher(cfg, service)
 
@@ -102,7 +169,7 @@ async def run() -> None:
     await site.start()
     log.info("HTTP слушает %s:%s, Mini App: %s", cfg.host, cfg.port, cfg.webapp_url or "выключен")
 
-    me = await bot.get_me()
+    me = await connect_telegram(bot, cfg)
     log.info("Бот @%s запущен, режим оплаты: %s", me.username, cfg.payment_mode)
     await setup_profile(bot, cfg)
 

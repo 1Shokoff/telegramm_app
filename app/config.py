@@ -77,6 +77,7 @@ class Config:
     payment_mode: str
     payment_details: str
     instruction_template: str
+    telegram_proxy: str
     order_prefix: str
     db_path: str
     host: str
@@ -112,6 +113,13 @@ def load_config() -> Config:
     if mode == "stars" and stars <= 0:
         raise SystemExit("PAYMENT_MODE=stars требует PRICE_STARS > 0")
 
+    proxy = _s("TELEGRAM_PROXY")
+    if proxy and "://" not in proxy:
+        raise SystemExit(
+            "TELEGRAM_PROXY должен начинаться со схемы: "
+            "socks5://host:port, http://host:port или с логином socks5://user:pass@host:port"
+        )
+
     return Config(
         bot_token=token,
         seller_ids=sellers,
@@ -124,6 +132,7 @@ def load_config() -> Config:
         payment_mode=mode,
         payment_details=_multiline("PAYMENT_DETAILS"),
         instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
+        telegram_proxy=proxy,
         order_prefix=_s("ORDER_PREFIX", "NP"),
         db_path=_s("DB_PATH", "/data/bot.sqlite3"),
         host=_s("HOST", "0.0.0.0"),
