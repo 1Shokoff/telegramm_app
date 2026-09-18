@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import signal
+import sqlite3
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -78,8 +79,17 @@ async def run() -> None:
     )
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
-    os.makedirs(os.path.dirname(cfg.db_path) or ".", exist_ok=True)
-    await db.init(cfg.db_path)
+    try:
+        os.makedirs(os.path.dirname(cfg.db_path) or ".", exist_ok=True)
+        await db.init(cfg.db_path)
+    except (sqlite3.OperationalError, OSError) as exc:
+        raise SystemExit(
+            "Не удалось открыть базу %s: %s\n"
+            "Чаще всего это права на каталог: внутри контейнера процесс работает "
+            "под пользователем app (uid 10001). Проверьте, что том с базой доступен "
+            "ему на запись — в docker-compose.yml для этого используется именованный "
+            "том bot_data, а не папка с хоста." % (cfg.db_path, exc)
+        )
 
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     service = OrderService(bot, cfg)

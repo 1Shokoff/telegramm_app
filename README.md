@@ -63,14 +63,18 @@ git pull && docker compose up -d --build
 
 ### Бэкап
 
-Вся база — один файл `data/bot.sqlite3`:
+Вся база — один файл в томе `bot_data`. Достать копию на хост:
 
 ```bash
-docker compose exec bot python -c "import sqlite3,shutil; shutil.copy('/data/bot.sqlite3','/data/backup.sqlite3')"
+docker compose cp bot:/data/bot.sqlite3 ./backup-$(date +%F).sqlite3
 ```
 
-Копируйте `data/` целиком (вместе с `-wal`), когда контейнер остановлен, либо
-делайте копию как выше — на ходу.
+База лежит в именованном томе Docker, а не в папке проекта: том наследует
+права от образа, поэтому непривилегированный пользователь контейнера может в
+него писать. Папка с хоста создаётся от root, и бот такую базу не откроет.
+
+`docker compose down` том сохраняет, `docker compose down -v` — удаляет вместе
+со всеми заказами.
 
 ## Настройки (.env)
 

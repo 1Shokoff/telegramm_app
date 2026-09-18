@@ -8,7 +8,10 @@ services:
       DB_PATH: /data/bot.sqlite3
       PORT: "8080"
     volumes:
-      - ./data:/data
+      # Именованный том, а не ./data: он наследует владельца от образа, и
+      # непривилегированный пользователь контейнера может в него писать.
+      # Бинд-монт с хоста Docker создаёт от root — бот тогда не откроет базу.
+      - bot_data:/data
       # UI можно править без пересборки образа: правьте файлы и обновляйте страницу.
       - ./webapp:/app/webapp:ro
     expose:
@@ -51,5 +54,6 @@ services:
         max-file: "3"
 
 volumes:
+  bot_data:
   caddy_data:
   caddy_config:
