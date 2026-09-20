@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from html import escape
 
-from . import const, imei as imei_mod
+from . import const, udid as udid_mod
 
 DONE_MARK = "✅"
 CURRENT_MARK = "🔸"
@@ -29,7 +29,7 @@ def steps_block(order: dict) -> str:
     step = const.STEP.get(order["status"], 0)
     labels = (
         "Оплата получена",
-        "IMEI передан",
+        "UDID передан",
         "Сертификат установлен",
         "Инструкция готова",
     )
@@ -48,8 +48,8 @@ def steps_block(order: dict) -> str:
 HINTS = {
     const.NEW: "Оплатите заказ, чтобы продолжить.",
     const.PAYMENT_CHECK: "Мы проверяем оплату. Обычно это занимает немного времени.",
-    const.PAID: "Отправьте IMEI вашего iPhone — 15 цифр.",
-    const.IMEI: "IMEI у продавца. Идёт подготовка сертификата.",
+    const.PAID: "Пришлите UDID вашего iPhone — 40 символов.",
+    const.UDID: "UDID у продавца. Идёт подготовка сертификата.",
     const.INSTALLED: "Сертификат готов, собираем инструкцию по установке.",
     const.DONE: "Заказ закрыт. Инструкция отправлена в этот чат.",
     const.CANCELLED: "Заказ отменён. Новый можно оформить командой /start.",
@@ -65,8 +65,8 @@ def buyer_order_card(order: dict) -> str:
     status = "Статус: <b>%s</b>" % e(const.TITLES.get(order["status"], order["status"]))
     body = steps_block(order)
     parts = [head, status, body]
-    if order.get("imei"):
-        parts.append("IMEI: <code>%s</code>" % imei_mod.mask(order["imei"]))
+    if order.get("device_udid"):
+        parts.append("UDID: <code>%s</code>" % udid_mod.mask(order["device_udid"]))
     hint = HINTS.get(order["status"])
     if hint:
         parts.append("<i>%s</i>" % e(hint))
@@ -79,10 +79,10 @@ def seller_order_card(order: dict) -> str:
         "Покупатель: %s" % user_line(order),
         "Сумма: %s · оплата: %s" % (money(order["price_rub"]), e(order["payment_mode"])),
     ]
-    if order.get("imei"):
-        lines.append("IMEI: <code>%s</code>" % e(order["imei"]))
+    if order.get("device_udid"):
+        lines.append("UDID: <code>%s</code>" % e(order["device_udid"]))
     else:
-        lines.append("IMEI: —")
+        lines.append("UDID: —")
     if order.get("payment_ref"):
         lines.append("Платёж: <code>%s</code>" % e(order["payment_ref"]))
     if order.get("seller_note"):
@@ -101,7 +101,7 @@ def welcome(first_name: str | None, price_rub: int, apps_count: int) -> str:
         "Без лимита установок и доплат за приложения.\n\n"
         "Как это работает:\n"
         "1. Оплата\n"
-        "2. Вы присылаете IMEI iPhone\n"
+        "2. Вы присылаете UDID iPhone\n"
         "3. Мы ставим сертификат\n"
         "4. Вы получаете инструкцию\n"
     ) % (hello, apps_count, money(price_rub))
@@ -118,21 +118,26 @@ def payment_instructions(order: dict, details: str) -> str:
     ) % (e(order["code"]), money(order["price_rub"]), body, e(order["code"]))
 
 
-def imei_request() -> str:
+def udid_request() -> str:
     return (
         "<b>Теперь добавьте iPhone</b>\n\n"
-        "Где найти IMEI: <b>Настройки → Основные → Об этом устройстве</b>.\n"
-        "Нажмите и удерживайте номер → «Скопировать».\n\n"
-        "Нужна строка <b>IMEI</b> из 15 цифр, а не IMEI2, EID или серийный номер.\n"
-        "Отправьте номер сообщением в этот чат — можно с пробелами."
+        "Нужен <b>UDID</b> — идентификатор устройства из 40 символов "
+        "(цифры и латинские буквы от a до f).\n\n"
+        "<b>Где его взять</b>\n"
+        "Подключите iPhone к компьютеру кабелем.\n"
+        "• macOS: Finder → ваш iPhone → строка под именем устройства. "
+        "Нажимайте на неё, пока не появится UDID, затем правый клик → «Скопировать».\n"
+        "• Windows: iTunes → значок устройства → «Обзор» → нажмите на «Серийный номер», "
+        "он сменится на UDID, затем правый клик → «Скопировать».\n\n"
+        "Отправьте номер сообщением в этот чат."
     )
 
 
-def imei_accepted(order: dict) -> str:
+def udid_accepted(order: dict) -> str:
     return (
-        "IMEI принят: <code>%s</code>\n\n"
+        "UDID принят: <code>%s</code>\n\n"
         "Заказ %s передан продавцу. Следующий шаг — установка сертификата."
-    ) % (imei_mod.mask(order["imei"]), e(order["code"]))
+    ) % (udid_mod.mask(order["device_udid"]), e(order["code"]))
 
 
 def help_text(support_username: str, has_webapp: bool) -> str:
@@ -141,7 +146,7 @@ def help_text(support_username: str, has_webapp: bool) -> str:
         "",
         "/start — витрина и новый заказ",
         "/order — статус вашего заказа",
-        "/imei — как найти IMEI",
+        "/udid — как найти UDID",
         "/forget — удалить мои данные из бота",
     ]
     if has_webapp:
@@ -154,7 +159,7 @@ def help_text(support_username: str, has_webapp: bool) -> str:
 
 
 PRIVACY = (
-    "IMEI нужен только для выпуска сертификата под ваше устройство. "
+    "UDID нужен только для выпуска сертификата под ваше устройство. "
     "Он виден продавцу и хранится до закрытия заказа. "
-    "Команда /forget удаляет ваши заказы и IMEI из базы бота."
+    "Команда /forget удаляет ваши заказы и UDID из базы бота."
 )

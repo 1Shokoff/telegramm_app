@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import CallbackQuery, Message
 
-from .. import catalog, const, db, imei as imei_mod, keyboards, texts
+from .. import catalog, const, db, keyboards, texts, udid as udid_mod
 from ..config import Config
 from ..service import OrderService, ServiceError
 
@@ -45,9 +45,9 @@ async def cmd_order(message: Message, cfg: Config) -> None:
     await _show_order(message, cfg, order)
 
 
-@router.message(Command("imei"))
-async def cmd_imei(message: Message) -> None:
-    await message.answer(texts.imei_request() + "\n\n" + texts.PRIVACY)
+@router.message(Command("udid"))
+async def cmd_udid(message: Message) -> None:
+    await message.answer(texts.udid_request() + "\n\n" + texts.PRIVACY)
 
 
 @router.message(Command("help"))
@@ -59,7 +59,7 @@ async def cmd_help(message: Message, cfg: Config) -> None:
 async def cmd_forget(message: Message) -> None:
     removed = await db.purge_user(message.from_user.id)
     if removed:
-        await message.answer("Ваши заказы и IMEI удалены из базы бота.")
+        await message.answer("Ваши заказы и UDID удалены из базы бота.")
     else:
         await message.answer("В базе нет ваших данных.")
 
@@ -81,9 +81,9 @@ async def nav_help(call: CallbackQuery, cfg: Config) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data == "nav:imei_help")
-async def nav_imei_help(call: CallbackQuery) -> None:
-    await call.message.answer(texts.imei_request())
+@router.callback_query(F.data == "nav:udid_help")
+async def nav_udid_help(call: CallbackQuery) -> None:
+    await call.message.answer(texts.udid_request())
     await call.answer()
 
 
@@ -91,7 +91,7 @@ async def nav_imei_help(call: CallbackQuery) -> None:
 async def nav_terms(call: CallbackQuery, cfg: Config) -> None:
     await call.message.answer(
         "<b>Условия заказа</b>\n\n"
-        "После оплаты вы указываете IMEI. Продавец выполнит установку сертификата "
+        "После оплаты вы указываете UDID устройства. Продавец выполнит установку сертификата "
         "и подготовит инструкцию.\n\n" + texts.PRIVACY
     )
     await call.answer()
@@ -101,7 +101,7 @@ async def nav_terms(call: CallbackQuery, cfg: Config) -> None:
 async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
     await call.message.answer(
         "<b>Оформление заказа</b>\n\n"
-        "%s\nIMEI укажете следующим шагом.\n\n"
+        "%s\nUDID укажете следующим шагом.\n\n"
         "Цена: <b>%s</b>\nОплата: %s"
         % (
             texts.e(cfg.product_title),
@@ -172,7 +172,7 @@ async def cb_claim(call: CallbackQuery, cfg: Config, service: OrderService) -> N
         return
     await call.message.answer(
         "Спасибо! Заказ <b>%s</b> отправлен на проверку оплаты.\n"
-        "Как только продавец подтвердит платёж, попросим IMEI." % texts.e(order["code"]),
+        "Как только продавец подтвердит платёж, попросим UDID." % texts.e(order["code"]),
         reply_markup=keyboards.buyer_order_kb(cfg, order),
     )
     await call.answer("Отправлено продавцу")
@@ -247,29 +247,29 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
     await call.answer()
 
 
-# ------------------------------------------------------------------- IMEI текстом
+# ------------------------------------------------------------------- UDID текстом
 
 
 @router.message(StateFilter(None), F.text)
 async def free_text(message: Message, cfg: Config, service: OrderService) -> None:
     await _remember(message)
     order = await db.get_active_order(message.from_user.id)
-    digits = imei_mod.normalize(message.text)
+    value = udid_mod.normalize(message.text)
 
     if order and order["status"] == const.PAID:
         try:
-            updated = await service.submit_imei(order["id"], message.text, message.from_user.id)
+            updated = await service.submit_udid(order["id"], message.text, message.from_user.id)
         except ServiceError as exc:
-            await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.imei_request()))
+            await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.udid_request()))
             return
         await message.answer(
-            texts.imei_accepted(updated), reply_markup=keyboards.buyer_order_kb(cfg, updated)
+            texts.udid_accepted(updated), reply_markup=keyboards.buyer_order_kb(cfg, updated)
         )
         return
 
-    if 13 <= len(digits) <= 17 and order:
+    if order and len(value) >= 24:
         await message.answer(
-            "Похоже на IMEI, но сейчас он не нужен: статус заказа — «%s»."
+            "Похоже на идентификатор устройства, но сейчас он не нужен: статус заказа — «%s»."
             % texts.e(const.TITLES.get(order["status"], order["status"]))
         )
         return

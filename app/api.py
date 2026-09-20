@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import auth, catalog, const, db, imei as imei_mod, texts
+from . import auth, catalog, const, db, texts, udid as udid_mod
 from .config import Config
 from .service import OrderService, ServiceError
 
@@ -71,7 +71,7 @@ async def with_user(order: dict | None) -> dict | None:
     return merged
 
 
-def order_public(order: dict | None, *, full_imei: bool = False) -> dict | None:
+def order_public(order: dict | None, *, full: bool = False) -> dict | None:
     if not order:
         return None
     data = {
@@ -84,16 +84,16 @@ def order_public(order: dict | None, *, full_imei: bool = False) -> dict | None:
         "price": order["price_rub"],
         "priceText": texts.money(order["price_rub"]),
         "paymentMode": order["payment_mode"],
-        "imeiMasked": imei_mod.mask(order.get("imei")),
-        "hasImei": bool(order.get("imei")),
+        "udidMasked": udid_mod.mask(order.get("device_udid")),
+        "hasUdid": bool(order.get("device_udid")),
         "instruction": order.get("instruction"),
         "note": order.get("seller_note"),
         "createdAt": order["created_at"],
         "updatedAt": order["updated_at"],
         "isOpen": order["status"] in const.OPEN_STATUSES,
     }
-    if full_imei:
-        data["imei"] = order.get("imei")
+    if full:
+        data["udid"] = order.get("device_udid")
         data["userId"] = order["user_id"]
         data["username"] = order.get("username")
         data["firstName"] = order.get("first_name")
@@ -142,7 +142,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
             "privacy": texts.PRIVACY,
-            "testImei": imei_mod.TEST_IMEI if cfg.dev_mode else None,
+            "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,
             "order": order_public(order),
         }
     )
@@ -202,12 +202,12 @@ async def invoice(request: web.Request) -> web.Response:
     return web.json_response({"link": link})
 
 
-@routes.post("/api/order/imei")
-async def submit_imei(request: web.Request) -> web.Response:
+@routes.post("/api/order/udid")
+async def submit_udid(request: web.Request) -> web.Response:
     user = await current_user(request)
     data = await body(request)
-    order = await service_of(request).submit_imei(
-        int(data.get("orderId", 0)), str(data.get("imei", "")), user.id
+    order = await service_of(request).submit_udid(
+        int(data.get("orderId", 0)), str(data.get("udid", "")), user.id
     )
     return web.json_response({"order": order_public(order)})
 
@@ -233,13 +233,13 @@ async def order_help(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-@routes.post("/api/order/imei/check")
-async def check_imei(request: web.Request) -> web.Response:
-    """Проверка номера до отправки — как «Проверить номер» на экране IMEI."""
+@routes.post("/api/order/udid/check")
+async def check_udid(request: web.Request) -> web.Response:
+    """Проверка номера до отправки — как «Проверить номер» на экране UDID."""
     await current_user(request)
     data = await body(request)
-    value, error = imei_mod.validate(str(data.get("imei", "")))
-    return web.json_response({"valid": bool(value), "error": error, "masked": imei_mod.mask(value)})
+    value, error = udid_mod.validate(str(data.get("udid", "")))
+    return web.json_response({"valid": bool(value), "error": error, "masked": udid_mod.mask(value)})
 
 
 # ------------------------------------------------------------------ продавец
@@ -257,7 +257,7 @@ async def seller_orders(request: web.Request) -> web.Response:
     counts = await db.status_counts()
     return web.json_response(
         {
-            "orders": [order_public(o, full_imei=True) for o in orders],
+            "orders": [order_public(o, full=True) for o in orders],
             "counts": counts,
             "titles": const.TITLES,
         }
@@ -289,7 +289,7 @@ async def seller_action(request: web.Request) -> web.Response:
     else:
         raise ApiError("Неизвестное действие: %s" % action)
 
-    return web.json_response({"order": order_public(await with_user(order), full_imei=True)})
+    return web.json_response({"order": order_public(await with_user(order), full=True)})
 
 
 # ------------------------------------------------------------------- статика

@@ -138,7 +138,7 @@ async def cmd_sellerhelp(message: Message) -> None:
     await message.answer(
         "<b>Команды продавца</b>\n\n"
         "/orders — открытые заказы (/orders all — все)\n"
-        "/find NP-0001 — найти по коду, IMEI или юзернейму\n"
+        "/find NP-0001 — найти по коду, UDID или юзернейму\n"
         "/log NP-0001 — история заказа\n"
         "/note NP-0001 текст — заметка к заказу\n"
         "/stats — счётчики по статусам\n\n"
@@ -168,7 +168,7 @@ async def cb_card(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("o:noop:"))
 async def cb_noop(call: CallbackQuery) -> None:
-    await call.answer("Ход покупателя — ждём IMEI")
+    await call.answer("Ход покупателя — ждём UDID")
 
 
 @router.callback_query(F.data.startswith("o:payok:"))
@@ -183,7 +183,7 @@ async def cb_payok(call: CallbackQuery, service: OrderService) -> None:
         return
     text, kb = await _card(order)
     await call.message.edit_text(text, reply_markup=kb)
-    await call.answer("Оплата подтверждена, у покупателя запрошен IMEI")
+    await call.answer("Оплата подтверждена, у покупателя запрошен UDID")
 
 
 @router.callback_query(F.data.startswith("o:payno:"))

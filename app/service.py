@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup
 
-from . import const, db, imei as imei_mod, keyboards, texts
+from . import const, db, keyboards, texts, udid as udid_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ class OrderService:
         assert updated
         await self.send(
             updated["user_id"],
-            "✅ <b>Оплата получена</b>\n\n" + texts.imei_request(),
+            "✅ <b>Оплата получена</b>\n\n" + texts.udid_request(),
             keyboards.buyer_order_kb(self.cfg, updated),
         )
         return updated
@@ -129,27 +129,27 @@ class OrderService:
         )
         return updated
 
-    async def submit_imei(self, order_id: int, raw: str, actor_id: int) -> dict:
+    async def submit_udid(self, order_id: int, raw: str, actor_id: int) -> dict:
         order = await self._load(order_id)
         if order["user_id"] != actor_id:
             raise ServiceError("Это не ваш заказ.")
         if order["status"] == const.NEW or order["status"] == const.PAYMENT_CHECK:
             raise ServiceError("Сначала дождитесь подтверждения оплаты.")
-        if order["status"] not in (const.PAID, const.IMEI):
-            raise ServiceError("IMEI по этому заказу уже принят в работу.")
+        if order["status"] not in (const.PAID, const.UDID):
+            raise ServiceError("UDID по этому заказу уже принят в работу.")
 
-        value, error = imei_mod.validate(raw)
+        value, error = udid_mod.validate(raw)
         if error or not value:
-            raise ServiceError(error or "Некорректный IMEI.")
+            raise ServiceError(error or "Некорректный UDID.")
 
-        updated = await db.set_imei(order_id, value, "user:%d" % actor_id)
+        updated = await db.set_udid(order_id, value, "user:%d" % actor_id)
         assert updated
-        await self.push_order_to_sellers(updated, "📱 <b>Получен IMEI</b>")
+        await self.push_order_to_sellers(updated, "📱 <b>Получен UDID</b>")
         return updated
 
     async def mark_installed(self, order_id: int, actor: str) -> dict:
         order = await self._load(order_id)
-        if order["status"] != const.IMEI:
+        if order["status"] != const.UDID:
             raise ServiceError("Ожидался статус «Ставим сертификат».")
         updated = await db.set_status(order_id, const.INSTALLED, actor, "сертификат установлен")
         assert updated
@@ -162,7 +162,7 @@ class OrderService:
 
     async def send_instruction(self, order_id: int, text: str, actor: str) -> dict:
         order = await self._load(order_id)
-        if order["status"] not in (const.IMEI, const.INSTALLED):
+        if order["status"] not in (const.UDID, const.INSTALLED):
             raise ServiceError("Инструкция отправляется после установки сертификата.")
         body = (text or "").strip()
         if len(body) < 5:

@@ -265,6 +265,12 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
   outline: none;
 }
 .field input:focus { border-color: var(--muted); }
+/* UDID из 40 символов не влезает в крупный кегль на узком экране. */
+.field input.udid {
+  font-size: 14px;
+  letter-spacing: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .field-foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 8px; }
 .field-foot .count.full { color: var(--ok); }
 .field-error { color: var(--danger); font-size: 13px; margin-top: 8px; }

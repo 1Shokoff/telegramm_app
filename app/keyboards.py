@@ -72,7 +72,7 @@ def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
     if status == const.NEW:
         return payment_kb(order["id"], order["payment_mode"])
     if status == const.PAID:
-        rows.append([InlineKeyboardButton(text="Как найти IMEI", callback_data="nav:imei_help")])
+        rows.append([InlineKeyboardButton(text="Как найти UDID", callback_data="nav:udid_help")])
     rows.append([InlineKeyboardButton(text="Обновить статус", callback_data=cb("refresh", order["id"]))])
     wa = webapp_button(cfg, "Открыть приложение")
     if wa:
@@ -95,8 +95,8 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
             ]
         )
     elif status == const.PAID:
-        rows.append([InlineKeyboardButton(text="⏳ Ждём IMEI от покупателя", callback_data=cb("noop", oid))])
-    elif status == const.IMEI:
+        rows.append([InlineKeyboardButton(text="⏳ Ждём UDID от покупателя", callback_data=cb("noop", oid))])
+    elif status == const.UDID:
         rows.append([InlineKeyboardButton(text="📲 Сертификат установлен", callback_data=cb("installed", oid))])
     elif status == const.INSTALLED:
         rows.append([InlineKeyboardButton(text="📄 Отправить инструкцию", callback_data=cb("instr", oid))])

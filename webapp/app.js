@@ -8,19 +8,19 @@ const state = {
   error: null,
   showAllApps: false,
   filter: 'Все',
-  imei: '',
-  imeiChecked: null,
-  imeiError: null,
+  udid: '',
+  udidChecked: null,
+  udidError: null,
   agreeTerms: false,
-  agreeImei: false,
+  agreeUdid: false,
   busy: false,
   seller: { status: 'open', q: '', orders: [], counts: {}, current: null, instruction: '' },
 };
 
 const STEP_LABELS = [
   ['Оплата получена', 'Тестовая покупка подтверждена'],
-  ['IMEI передан', 'Номер подтверждён покупателем'],
-  ['Сертификат установлен', 'После получения IMEI'],
+  ['UDID передан', 'Номер подтверждён покупателем'],
+  ['Сертификат установлен', 'После получения UDID'],
   ['Инструкция готова', 'Появится после завершения установки'],
 ];
 
@@ -170,7 +170,7 @@ function viewCheckout() {
       '<div class="product">' +
         '<div class="app-icon" style="background:var(--surface-3)"><span>📱</span></div>' +
         '<div><div class="name">' + esc(b.product.title) + '</div>' +
-        '<div class="sub">IMEI укажете следующим шагом</div></div>' +
+        '<div class="sub">UDID укажете следующим шагом</div></div>' +
       '</div>' +
       '<div class="row"><span class="label">Цена</span><span class="value">' + esc(b.product.priceText) + '</span></div>' +
       '<div class="row"><span class="label">Оплата</span><span class="value">' + esc(modeText) + '</span></div>' +
@@ -178,7 +178,7 @@ function viewCheckout() {
         ? '<div class="row"><span class="label">Сумма в Stars</span><span class="value">' + (b.payment.stars || '—') + '</span></div>'
         : '') +
       '<details class="disclosure"><summary>Условия заказа</summary>' +
-        '<div class="body">После оплаты укажите IMEI. Продавец выполнит установку сертификата и подготовит инструкцию.\n\n' +
+        '<div class="body">После оплаты укажите UDID устройства. Продавец выполнит установку сертификата и подготовит инструкцию.\n\n' +
         esc(b.privacy) + '</div>' +
       '</details>' +
       '<label class="check"><input type="checkbox" id="agreeTerms"' + (state.agreeTerms ? ' checked' : '') + '>' +
@@ -223,44 +223,47 @@ function viewWaitingPayment(order) {
     stepper(1) +
     '<div class="pill">⏳ Оплата на проверке</div>' +
     '<h1>Проверяем платёж</h1>' +
-    '<p class="muted">Заказ ' + esc(order.code) + '. Продавец подтвердит поступление — после этого попросим IMEI.</p>' +
+    '<p class="muted">Заказ ' + esc(order.code) + '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
     '<div class="card"><button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button></div>' +
     '<button class="btn btn-ghost btn-sm" data-action="order-help">Помощь по заказу</button>'
   );
 }
 
-function viewImei(order) {
+function viewUdid(order) {
   const b = state.boot;
-  const len = state.imei.length;
-  const ready = len === 15 && state.agreeImei && !state.busy;
+  const len = state.udid.length;
+  const ready = len === 40 && state.agreeUdid && !state.busy;
 
   return (
     stepper(2) +
     '<div class="pill ok">✓ Оплата получена</div>' +
     '<h1>Теперь добавьте iPhone</h1>' +
-    '<p class="muted">Отправьте IMEI для заказа ' + esc(order.code) +
+    '<p class="muted">Отправьте UDID для заказа ' + esc(order.code) +
       '. Перед передачей продавцу вы сможете проверить номер.</p>' +
-    '<details class="disclosure" open><summary>Где найти IMEI?</summary>' +
-      '<div class="path"><b>Настройки</b><span class="sep">›</span><b>Основные</b>' +
-      '<span class="sep">›</span><b>Об этом устройстве</b></div>' +
-      '<div class="body">Нажмите и удерживайте номер → «Скопировать». Нужна строка IMEI из 15 цифр, ' +
-      'а не IMEI2, EID или серийный номер.</div>' +
+    '<details class="disclosure" open><summary>Где найти UDID?</summary>' +
+      '<div class="body">Подключите iPhone к компьютеру кабелем.\n\n' +
+      '• macOS: Finder → ваш iPhone → строка под именем устройства. Нажимайте на неё, ' +
+      'пока не появится UDID, затем правый клик → «Скопировать».\n' +
+      '• Windows: iTunes → значок устройства → «Обзор» → нажмите на «Серийный номер», ' +
+      'он сменится на UDID.\n\n' +
+      'UDID — 40 символов: цифры и латинские буквы от a до f.</div>' +
     '</details>' +
     '<div class="field">' +
-      '<label for="imeiInput">IMEI iPhone</label>' +
-      '<input id="imeiInput" inputmode="numeric" autocomplete="off" placeholder="000000000000000" value="' + esc(state.imei) + '">' +
-      '<div class="field-foot"><span>Можно вставить с пробелами</span>' +
-      '<span class="count' + (len === 15 ? ' full' : '') + '" id="imeiCount">' + len + ' / 15</span></div>' +
-      (state.imeiError ? '<div class="field-error">' + esc(state.imeiError) + '</div>' : '') +
+      '<label for="udidInput">UDID устройства</label>' +
+      '<input id="udidInput" class="udid" autocomplete="off" autocapitalize="off" spellcheck="false" ' +
+      'placeholder="40 символов" value="' + esc(state.udid) + '">' +
+      '<div class="field-foot"><span>Можно вставить из буфера</span>' +
+      '<span class="count' + (len === 40 ? ' full' : '') + '" id="udidCount">' + len + ' / 40</span></div>' +
+      (state.udidError ? '<div class="field-error">' + esc(state.udidError) + '</div>' : '') +
     '</div>' +
-    (b.testImei ? '<button class="linkish" data-action="imei-test">Использовать тестовый номер</button>' : '') +
-    '<label class="check"><input type="checkbox" id="agreeImei"' + (state.agreeImei ? ' checked' : '') + '>' +
-      '<span>Разрешаю передать IMEI продавцу для обработки заказа.</span></label>' +
-    (state.imeiChecked
+    (b.testUdid ? '<button class="linkish" data-action="udid-test">Использовать тестовый номер</button>' : '') +
+    '<label class="check"><input type="checkbox" id="agreeUdid"' + (state.agreeUdid ? ' checked' : '') + '>' +
+      '<span>Разрешаю передать UDID продавцу для обработки заказа.</span></label>' +
+    (state.udidChecked
       ? '<div class="card tight"><div class="row"><span class="label">Проверено</span>' +
-        '<span class="value mono">' + esc(state.imeiChecked) + '</span></div>' +
-        '<button class="btn btn-primary" data-action="imei-send">Отправить продавцу</button></div>'
-      : '<button class="btn btn-primary" id="imeiBtn" data-action="imei-check"' + (ready ? '' : ' disabled') + '>' +
+        '<span class="value mono">' + esc(state.udidChecked) + '</span></div>' +
+        '<button class="btn btn-primary" data-action="udid-send">Отправить продавцу</button></div>'
+      : '<button class="btn btn-primary" id="udidBtn" data-action="udid-check"' + (ready ? '' : ' disabled') + '>' +
         'Проверить номер →</button>') +
     '<div class="cta-note">' + esc(b.privacy) + '</div>'
   );
@@ -287,7 +290,7 @@ function viewOrderStatus(order) {
       '<div class="product">' +
         '<div class="app-icon" style="background:var(--surface-3)"><span>📱</span></div>' +
         '<div><div class="name">' + esc(b.product.title) + '</div>' +
-        '<div class="sub">IMEI ' + esc(order.imeiMasked) + '</div></div>' +
+        '<div class="sub">UDID ' + esc(order.udidMasked) + '</div></div>' +
       '</div>' +
       '<div class="timeline">' + rows + '</div>' +
       '<div class="notice">' + esc(order.hint) + '</div>' +
@@ -305,7 +308,7 @@ function viewOrder() {
   if (!order || (!order.isOpen && order.status !== 'done')) return viewCheckout();
   if (order.status === 'new') return viewPayment(order);
   if (order.status === 'payment_check') return viewWaitingPayment(order);
-  if (order.status === 'paid') return viewImei(order);
+  if (order.status === 'paid') return viewUdid(order);
   return viewOrderStatus(order);
 }
 
@@ -319,13 +322,14 @@ function viewHelp() {
     '<h1>Помощь</h1>' +
     '<div class="card">' +
       '<details class="disclosure"><summary>Как проходит заказ?</summary><div class="body">' +
-        'Оплата → вы присылаете IMEI → продавец ставит сертификат → вы получаете инструкцию.' +
+        'Оплата → вы присылаете UDID → продавец ставит сертификат → вы получаете инструкцию.' +
       '</div></details>' +
-      '<details class="disclosure"><summary>Где найти IMEI?</summary><div class="body">' +
-        'Настройки › Основные › Об этом устройстве. Нужна строка IMEI из 15 цифр.' +
+      '<details class="disclosure"><summary>Где найти UDID?</summary><div class="body">' +
+        'Подключите iPhone к компьютеру: Finder на macOS или iTunes на Windows → нажмите ' +
+        'на серийный номер устройства, он сменится на UDID из 40 символов.' +
       '</div></details>' +
       '<details class="disclosure"><summary>Что с моими данными?</summary><div class="body">' +
-        esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и IMEI.' +
+        esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и UDID.' +
       '</div></details>' +
       support +
     '</div>'
@@ -351,7 +355,7 @@ function sellerActions(o) {
   if (o.status === 'new' || o.status === 'payment_check') {
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:payok">Оплата получена</button>');
     buttons.push('<button class="btn btn-secondary btn-sm" data-action="seller-act:payno">Платёж не найден</button>');
-  } else if (o.status === 'imei') {
+  } else if (o.status === 'udid') {
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:installed">Сертификат установлен</button>');
   } else if (o.status === 'installed') {
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-instr">Отправить инструкцию</button>');
@@ -370,7 +374,7 @@ function viewSellerOrder(o) {
         esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
       '<div class="row"><span class="label">Telegram ID</span><span class="value mono">' + esc(o.userId) + '</span></div>' +
       '<div class="row"><span class="label">Сумма</span><span class="value">' + esc(o.priceText) + '</span></div>' +
-      '<div class="row"><span class="label">IMEI</span><span class="value mono">' + esc(o.imei || '—') + '</span></div>' +
+      '<div class="row"><span class="label">UDID</span><span class="value mono">' + esc(o.udid || '—') + '</span></div>' +
       '<div class="row"><span class="label">Создан</span><span class="value">' + esc((o.createdAt || '').replace('T', ' ').slice(0, 16)) + '</span></div>' +
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
       sellerActions(o) +
@@ -388,12 +392,12 @@ function viewSeller() {
   const s = state.seller;
   if (s.current) return viewSellerOrder(s.current);
 
-  const filters = [['open', 'Открытые'], ['payment_check', 'Проверить оплату'], ['imei', 'Ставить сертификат'],
+  const filters = [['open', 'Открытые'], ['payment_check', 'Проверить оплату'], ['udid', 'Ставить сертификат'],
     ['installed', 'Инструкция'], ['done', 'Готовые'], ['all', 'Все']];
 
   return (
     '<h1>Заказы</h1>' +
-    '<input class="search" id="sellerSearch" placeholder="Код заказа, IMEI или @юзернейм" value="' + esc(s.q) + '">' +
+    '<input class="search" id="sellerSearch" placeholder="Код заказа, UDID или @юзернейм" value="' + esc(s.q) + '">' +
     '<div class="filters">' + filters.map(([key, label]) => {
       const n = key === 'all' || key === 'open' ? '' : ' · ' + (s.counts[key] || 0);
       return '<div class="chip' + (s.status === key ? ' active' : '') + '" data-action="seller-filter:' + key + '">' +
@@ -462,29 +466,29 @@ function updateBackButton() {
 }
 
 function bindInputs() {
-  const imei = document.getElementById('imeiInput');
-  if (imei) {
-    imei.addEventListener('input', () => {
-      const digits = imei.value.replace(/\D+/g, '').slice(0, 15);
-      if (imei.value !== digits) imei.value = digits;
-      state.imei = digits;
-      state.imeiChecked = null;
-      const count = document.getElementById('imeiCount');
+  const udid = document.getElementById('udidInput');
+  if (udid) {
+    udid.addEventListener('input', () => {
+      const clean = udid.value.replace(/[^0-9a-fA-F]+/g, '').toLowerCase().slice(0, 40);
+      if (udid.value !== clean) udid.value = clean;
+      state.udid = clean;
+      state.udidChecked = null;
+      const count = document.getElementById('udidCount');
       if (count) {
-        count.textContent = digits.length + ' / 15';
-        count.className = 'count' + (digits.length === 15 ? ' full' : '');
+        count.textContent = clean.length + ' / 40';
+        count.className = 'count' + (clean.length === 40 ? ' full' : '');
       }
-      const btn = document.getElementById('imeiBtn');
-      if (btn) btn.disabled = !(digits.length === 15 && state.agreeImei);
+      const btn = document.getElementById('udidBtn');
+      if (btn) btn.disabled = !(clean.length === 40 && state.agreeUdid);
     });
   }
 
-  const agreeImei = document.getElementById('agreeImei');
-  if (agreeImei) {
-    agreeImei.addEventListener('change', () => {
-      state.agreeImei = agreeImei.checked;
-      const btn = document.getElementById('imeiBtn');
-      if (btn) btn.disabled = !(state.imei.length === 15 && state.agreeImei);
+  const agreeUdid = document.getElementById('agreeUdid');
+  if (agreeUdid) {
+    agreeUdid.addEventListener('change', () => {
+      state.agreeUdid = agreeUdid.checked;
+      const btn = document.getElementById('udidBtn');
+      if (btn) btn.disabled = !(state.udid.length === 40 && state.agreeUdid);
     });
   }
 
@@ -591,37 +595,37 @@ const actions = {
     });
   }),
 
-  'imei-test': () => {
-    state.imei = state.boot.testImei || '';
-    state.imeiChecked = null;
-    state.imeiError = null;
+  'udid-test': () => {
+    state.udid = state.boot.testUdid || '';
+    state.udidChecked = null;
+    state.udidError = null;
     render();
   },
 
-  'imei-check': () => guard(async () => {
-    state.imeiError = null;
-    const data = await api('/api/order/imei/check', { method: 'POST', body: { imei: state.imei } });
+  'udid-check': () => guard(async () => {
+    state.udidError = null;
+    const data = await api('/api/order/udid/check', { method: 'POST', body: { udid: state.udid } });
     if (!data.valid) {
-      state.imeiError = data.error;
-      state.imeiChecked = null;
+      state.udidError = data.error;
+      state.udidChecked = null;
       haptic('error');
     } else {
-      state.imeiChecked = data.masked;
+      state.udidChecked = data.masked;
       haptic('success');
     }
     render();
   }),
 
-  'imei-send': () => guard(async () => {
-    const data = await api('/api/order/imei', {
+  'udid-send': () => guard(async () => {
+    const data = await api('/api/order/udid', {
       method: 'POST',
-      body: { orderId: state.boot.order.id, imei: state.imei },
+      body: { orderId: state.boot.order.id, udid: state.udid },
     });
     state.boot.order = data.order;
-    state.imei = '';
-    state.imeiChecked = null;
-    state.agreeImei = false;
-    toast('IMEI передан продавцу');
+    state.udid = '';
+    state.udidChecked = null;
+    state.agreeUdid = false;
+    toast('UDID передан продавцу');
     render();
   }),
 

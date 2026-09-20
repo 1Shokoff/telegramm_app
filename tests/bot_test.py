@@ -155,20 +155,21 @@ async def main() -> int:
     await dp.feed_update(bot, callback_update(SELLER, "o:payok:%d" % order["id"]))
     order = await db.get_order(order["id"])
     check("продавец подтвердил оплату", order["status"] == const.PAID)
-    check("у покупателя запросили IMEI", any("IMEI" in t for t in bot.texts_to(BUYER)))
+    check("у покупателя запросили UDID", any("UDID" in t for t in bot.texts_to(BUYER)))
 
-    print("\nIMEI текстом в чат")
+    print("\nUDID текстом в чат")
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "12345"))
     order = await db.get_order(order["id"])
-    check("мусор не принимается", order["imei"] is None)
-    check("подсказка про 15 цифр", any("15" in t for t in bot.texts_to(BUYER)))
+    check("мусор не принимается", order["device_udid"] is None)
+    check("подсказка про 40 символов", any("40" in t for t in bot.texts_to(BUYER)))
 
     bot.reset()
-    await dp.feed_update(bot, message_update(BUYER, "490154 203237518"))
+    await dp.feed_update(bot, message_update(BUYER, "2b6f0cc904d137be2e17 30235f5664094b831186"))
     order = await db.get_order(order["id"])
-    check("IMEI принят", order["imei"] == "490154203237518" and order["status"] == const.IMEI)
-    check("продавец получил IMEI", any("Получен IMEI" in t for t in bot.texts_to(SELLER)))
+    check("UDID принят", order["device_udid"] == "2b6f0cc904d137be2e1730235f5664094b831186"
+          and order["status"] == const.UDID)
+    check("продавец получил UDID", any("Получен UDID" in t for t in bot.texts_to(SELLER)))
 
     print("\nЗавершение заказа")
     bot.reset()

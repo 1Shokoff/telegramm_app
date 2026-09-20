@@ -30,13 +30,13 @@ CREATE TABLE IF NOT EXISTS orders (
     price_rub    INTEGER NOT NULL,
     payment_mode TEXT    NOT NULL,
     payment_ref  TEXT,
-    imei         TEXT,
+    device_udid  TEXT,
     instruction  TEXT,
     seller_note  TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     paid_at      TEXT,
-    imei_at      TEXT,
+    udid_at      TEXT,
     installed_at TEXT,
     done_at      TEXT
 );
@@ -77,7 +77,24 @@ async def init(path: str) -> None:
     await _conn.execute("PRAGMA busy_timeout=5000")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
+    await _migrate()
     log.info("База готова: %s", path)
+
+
+async def _migrate() -> None:
+    """Базы, созданные до перехода с IMEI на UDID, переименовывают свои колонки.
+
+    CREATE TABLE IF NOT EXISTS существующую таблицу не трогает, поэтому старую
+    схему нужно поправить отдельно. Операция идемпотентная.
+    """
+    columns = {row["name"] for row in await _fetchall("PRAGMA table_info(orders)")}
+    renames = (("imei", "device_udid"), ("imei_at", "udid_at"))
+    for old, new in renames:
+        if old in columns and new not in columns:
+            await conn().execute("ALTER TABLE orders RENAME COLUMN %s TO %s" % (old, new))
+            log.info("Миграция: колонка %s переименована в %s", old, new)
+    await conn().execute("UPDATE orders SET status = ? WHERE status = 'imei'", (const.UDID,))
+    await conn().commit()
 
 
 async def close() -> None:
@@ -197,7 +214,7 @@ async def list_orders(
     if query:
         like = "%" + query.strip() + "%"
         sql += (
-            " AND (o.code LIKE ? OR o.imei LIKE ? OR u.username LIKE ?"
+            " AND (o.code LIKE ? OR o.device_udid LIKE ? OR u.username LIKE ?"
             " OR CAST(o.user_id AS TEXT) LIKE ?)"
         )
         args += [like, like, like, like]
@@ -213,7 +230,7 @@ async def status_counts() -> dict[str, int]:
 
 _TIMESTAMP_FIELD = {
     const.PAID: "paid_at",
-    const.IMEI: "imei_at",
+    const.UDID: "udid_at",
     const.INSTALLED: "installed_at",
     const.DONE: "done_at",
 }
@@ -245,12 +262,12 @@ async def set_payment_ref(order_id: int, ref: str) -> None:
     await conn().commit()
 
 
-async def set_imei(order_id: int, imei: str, actor: str) -> dict | None:
+async def set_udid(order_id: int, udid: str, actor: str) -> dict | None:
     await conn().execute(
-        "UPDATE orders SET imei = ?, updated_at = ? WHERE id = ?", (imei, now(), order_id)
+        "UPDATE orders SET device_udid = ?, updated_at = ? WHERE id = ?", (udid, now(), order_id)
     )
     await conn().commit()
-    return await set_status(order_id, const.IMEI, actor, "IMEI получен")
+    return await set_status(order_id, const.UDID, actor, "UDID получен")
 
 
 async def set_instruction(order_id: int, text: str, actor: str) -> dict | None:

@@ -1,6 +1,6 @@
 """Сквозная проверка без Telegram: python -m tests.smoke_test
 
-Прогоняет весь путь заказа (оплата → IMEI → сертификат → инструкция)
+Прогоняет весь путь заказа (оплата → UDID → сертификат → инструкция)
 через сервисный слой и через HTTP-API Mini App с настоящей подписью initData.
 """
 from __future__ import annotations
@@ -38,10 +38,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, const, db, imei as imei_mod  # noqa: E402
+from app import auth, const, db, udid as udid_mod  # noqa: E402
 from app.api import build_app  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, ServiceError  # noqa: E402
+
+SPACED_UDID = "2b6f0cc904d137be2e17 30235f5664094b831186"
 
 failures: list[str] = []
 
@@ -84,13 +86,16 @@ def make_init_data(user_id: int, name: str = "Тест") -> str:
     return urlencode(payload)
 
 
-def test_imei() -> None:
-    print("\nIMEI")
-    check("тестовый номер валиден", imei_mod.validate(imei_mod.TEST_IMEI)[0] == imei_mod.TEST_IMEI)
-    check("пробелы вычищаются", imei_mod.validate("49015420 3237518")[0] == imei_mod.TEST_IMEI)
-    check("14 цифр отклоняются", imei_mod.validate("49015420323751")[0] is None)
-    check("битая контрольная сумма", imei_mod.validate("490154203237519")[0] is None)
-    check("маска скрывает номер", imei_mod.mask(imei_mod.TEST_IMEI) == "•" * 11 + "7518")
+def test_udid() -> None:
+    print("\nUDID")
+    check("тестовый номер валиден", udid_mod.validate(udid_mod.TEST_UDID)[0] == udid_mod.TEST_UDID)
+    check("пробелы вычищаются", udid_mod.validate(SPACED_UDID)[0] == udid_mod.TEST_UDID)
+    check("верхний регистр приводится", udid_mod.validate(udid_mod.TEST_UDID.upper())[0] == udid_mod.TEST_UDID)
+    check("39 символов отклоняются", udid_mod.validate(udid_mod.TEST_UDID[:-1])[0] is None)
+    check("недопустимые символы отклоняются", udid_mod.validate("z" * 40)[0] is None)
+    check("IMEI распознаётся отдельно", "IMEI" in (udid_mod.validate("490154203237518")[1] or ""))
+    check("новый формат распознаётся", "25" in (udid_mod.validate("00008030-001C2D3E1E88802E")[1] or ""))
+    check("маска скрывает номер", udid_mod.mask(udid_mod.TEST_UDID).endswith("1186"))
 
 
 def test_auth() -> None:
@@ -124,10 +129,10 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     check("второй заказ не плодится", not created2 and again["id"] == order["id"])
 
     try:
-        await svc.submit_imei(order["id"], imei_mod.TEST_IMEI, BUYER)
-        check("IMEI до оплаты не принимается", False)
+        await svc.submit_udid(order["id"], udid_mod.TEST_UDID, BUYER)
+        check("UDID до оплаты не принимается", False)
     except ServiceError:
-        check("IMEI до оплаты не принимается", True)
+        check("UDID до оплаты не принимается", True)
 
     order = await svc.claim_payment(order["id"], BUYER)
     check("статус: оплата на проверке", order["status"] == const.PAYMENT_CHECK)
@@ -140,16 +145,16 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
 
     order = await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
     check("статус: оплачен", order["status"] == const.PAID)
-    check("у покупателя запросили IMEI", any("Оплата получена" in t for t in bot.to(BUYER)))
+    check("у покупателя запросили UDID", any("Оплата получена" in t for t in bot.to(BUYER)))
 
     try:
-        await svc.submit_imei(order["id"], "123", BUYER)
-        check("короткий IMEI отклонён", False)
+        await svc.submit_udid(order["id"], "123", BUYER)
+        check("короткий UDID отклонён", False)
     except ServiceError:
-        check("короткий IMEI отклонён", True)
+        check("короткий UDID отклонён", True)
 
-    order = await svc.submit_imei(order["id"], "490154 203237518", BUYER)
-    check("IMEI сохранён", order["imei"] == imei_mod.TEST_IMEI and order["status"] == const.IMEI)
+    order = await svc.submit_udid(order["id"], SPACED_UDID, BUYER)
+    check("UDID сохранён", order["device_udid"] == udid_mod.TEST_UDID and order["status"] == const.UDID)
 
     try:
         await svc.send_instruction(order["id"], "текст", "seller:%d" % SELLER)
@@ -158,7 +163,7 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     except ServiceError:
         check("инструкция до установки разрешена", True)
 
-    order = await db.set_status(order["id"], const.IMEI, "test")
+    order = await db.set_status(order["id"], const.UDID, "test")
     order = await svc.mark_installed(order["id"], "seller:%d" % SELLER)
     check("статус: сертификат установлен", order["status"] == const.INSTALLED)
 
@@ -201,11 +206,11 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("заказ через API создан", order["code"] == "NP-0003", order["code"])
 
         res = await client.post(
-            "/api/order/imei",
+            "/api/order/udid",
             headers=buyer_headers,
-            json={"orderId": order["id"], "imei": imei_mod.TEST_IMEI},
+            json={"orderId": order["id"], "udid": udid_mod.TEST_UDID},
         )
-        check("IMEI до оплаты — 400", res.status == 400)
+        check("UDID до оплаты — 400", res.status == 400)
 
         res = await client.post("/api/order/claim", headers=buyer_headers, json={"orderId": order["id"]})
         check("оплата заявлена", (await res.json())["order"]["status"] == const.PAYMENT_CHECK)
@@ -217,21 +222,21 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         seller_view = (await res.json())["order"]
         check("продавец подтвердил оплату", seller_view["status"] == const.PAID)
-        check("продавцу виден полный IMEI-ключ", "imei" in seller_view)
+        check("продавцу виден полный UDID", "udid" in seller_view)
 
         res = await client.post(
-            "/api/order/imei/check", headers=buyer_headers, json={"imei": "4901542032375"}
+            "/api/order/udid/check", headers=buyer_headers, json={"udid": "4901542032375"}
         )
         check("проверка номера ловит ошибку", (await res.json())["valid"] is False)
 
         res = await client.post(
-            "/api/order/imei",
+            "/api/order/udid",
             headers=buyer_headers,
-            json={"orderId": order["id"], "imei": "490154 203237518"},
+            json={"orderId": order["id"], "udid": SPACED_UDID},
         )
         data = (await res.json())["order"]
-        check("IMEI принят через API", data["status"] == const.IMEI)
-        check("покупателю IMEI замаскирован", data["imeiMasked"].endswith("7518") and "imei" not in data)
+        check("UDID принят через API", data["status"] == const.UDID)
+        check("покупателю UDID замаскирован", data["udidMasked"].endswith("1186") and "udid" not in data)
 
         res = await client.post(
             "/api/seller/action",
@@ -279,7 +284,7 @@ async def main() -> int:
     bot = FakeBot()
     svc = OrderService(bot, cfg)
 
-    test_imei()
+    test_udid()
     test_auth()
     await test_service(cfg, bot, svc)
     await test_api(cfg, bot, svc)
