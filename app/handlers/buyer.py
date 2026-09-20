@@ -46,8 +46,8 @@ async def cmd_order(message: Message, cfg: Config) -> None:
 
 
 @router.message(Command("udid"))
-async def cmd_udid(message: Message) -> None:
-    await message.answer(texts.udid_request() + "\n\n" + texts.PRIVACY)
+async def cmd_udid(message: Message, cfg: Config) -> None:
+    await message.answer(texts.udid_request(cfg.udid_guide_url) + "\n\n" + texts.PRIVACY)
 
 
 @router.message(Command("help"))
@@ -167,8 +167,8 @@ async def nav_help(call: CallbackQuery, cfg: Config) -> None:
 
 
 @router.callback_query(F.data == "nav:udid_help")
-async def nav_udid_help(call: CallbackQuery) -> None:
-    await call.message.answer(texts.udid_request())
+async def nav_udid_help(call: CallbackQuery, cfg: Config) -> None:
+    await call.message.answer(texts.udid_request(cfg.udid_guide_url))
     await call.answer()
 
 
@@ -368,7 +368,7 @@ async def free_text(message: Message, cfg: Config, service: OrderService) -> Non
         try:
             updated = await service.submit_udid(order["id"], text, message.from_user.id)
         except ServiceError as exc:
-            await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.udid_request()))
+            await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.udid_request(cfg.udid_guide_url)))
             return
         await message.answer(
             texts.udid_accepted(updated), reply_markup=keyboards.buyer_order_kb(cfg, updated)

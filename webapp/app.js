@@ -8,6 +8,7 @@ const state = {
   error: null,
   showAllApps: false,
   filter: 'Все',
+  newOrder: false,
   udid: '',
   udidChecked: null,
   udidError: null,
@@ -136,8 +137,7 @@ function viewHome() {
       '<h2>Нужное каждый день</h2>' +
       '<button data-action="tab:apps">Все ' + b.product.appsCount + ' →</button>' +
     '</div>' +
-    '<div class="grid">' + shown.map(appCard).join('') + '</div>' +
-    '<div class="cta-note mt">Демо-каталог · доступность проверяется до запуска</div>'
+    '<div class="grid">' + shown.map(appCard).join('') + '</div>'
   );
 }
 
@@ -190,7 +190,11 @@ function viewCheckout() {
         '<span>Ознакомился с условиями и понимаю порядок работы.</span></label>' +
       '<button class="btn btn-primary" id="buyBtn" data-action="buy"' + (state.agreeTerms ? '' : ' disabled') + '>' +
         'Оформить заказ и перейти к оплате</button>' +
-    '</div>'
+    '</div>' +
+    (state.newOrder && b.order
+      ? '<button class="btn btn-ghost btn-sm" data-action="back-to-order">Вернуться к заказу ' +
+        esc(b.order.code) + '</button>'
+      : '')
   );
 }
 
@@ -247,12 +251,17 @@ function viewUdid(order) {
     '<p class="muted">Отправьте UDID для заказа ' + esc(order.code) +
       '. Перед передачей продавцу вы сможете проверить номер.</p>' +
     '<details class="disclosure" open><summary>Где найти UDID?</summary>' +
-      '<div class="body">Подключите iPhone к компьютеру кабелем.\n\n' +
-      '• macOS: Finder → ваш iPhone → строка под именем устройства. Нажимайте на неё, ' +
-      'пока не появится UDID, затем правый клик → «Скопировать».\n' +
-      '• Windows: iTunes → значок устройства → «Обзор» → нажмите на «Серийный номер», ' +
-      'он сменится на UDID.\n\n' +
+      '<div class="body">Компьютер не нужен — всё делается на самом iPhone.\n\n' +
+      '1. Откройте в Safari сайт udid.tech\n' +
+      '2. Нажмите Get My UDID и разрешите загрузку профиля\n' +
+      '3. Зайдите в Настройки → Профиль загружен → Установить. ' +
+      'Если попросит, введите код-пароль iPhone\n' +
+      '4. После установки откроется страница с вашим UDID — скопируйте его\n\n' +
       'UDID — 40 символов: цифры и латинские буквы от a до f.</div>' +
+      '<button class="btn btn-secondary btn-sm mt" data-action="open-udid-site">' +
+        'Открыть udid.tech</button>' +
+      '<img class="guide" src="/static/img/udid-guide.webp" loading="lazy" ' +
+        'alt="Как узнать UDID на iPhone: пошаговые экраны">' +
     '</details>' +
     '<div class="field">' +
       '<label for="udidInput">UDID устройства</label>' +
@@ -273,6 +282,14 @@ function viewUdid(order) {
         'Проверить номер →</button>') +
     '<div class="cta-note">' + esc(b.privacy) + '</div>'
   );
+}
+
+function dateOf(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function timeOf(iso) {
@@ -367,7 +384,14 @@ async function loadChat(scroll) {
   const data = await api('/api/chat?orderId=' + state.chat.orderId);
   const changed = data.messages.length !== state.chat.messages.length;
   state.chat.messages = data.messages;
-  if (state.boot) state.boot.unread = 0;
+  if (state.boot) {
+    state.boot.unread = 0;
+    const row = (state.seller.orders || []).find((o) => o.id === state.chat.orderId);
+    if (row && row.unread) {
+      state.boot.sellerUnread = Math.max(0, (state.boot.sellerUnread || 0) - row.unread);
+      row.unread = 0;
+    }
+  }
   if (changed || scroll === true) paintChat(scroll !== false);
 }
 
@@ -380,13 +404,21 @@ function stopChatPolling() {
 
 function startChatPolling() {
   stopChatPolling();
+  let failures = 0;
   // Новые сообщения второй стороны подтягиваем сами: вебсокета тут нет.
   state.chat.timer = setInterval(() => {
     if (state.view !== 'chat') {
       stopChatPolling();
       return;
     }
-    loadChat(false).catch(() => {});
+    loadChat(false).then(() => { failures = 0; }).catch(() => {
+      failures += 1;
+      // Сервер недоступен или заказ уже не наш — не долбим его бесконечно.
+      if (failures >= 3) {
+        stopChatPolling();
+        toast('Связь с сервером потеряна, откройте переписку заново', true);
+      }
+    });
   }, 5000);
 }
 
@@ -401,6 +433,14 @@ function openChat(orderId, title, from) {
     await loadChat(true);
     startChatPolling();
   });
+}
+
+function confirmAction(message, onYes) {
+  if (tg && tg.showConfirm) {
+    tg.showConfirm(message, (ok) => { if (ok) onYes(); });
+    return;
+  }
+  if (window.confirm(message)) onYes();
 }
 
 function chatButton(label) {
@@ -439,13 +479,21 @@ function viewOrderStatus(order) {
         : '') +
       '<button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button>' +
     '</div>' +
+    (order.status === 'done'
+      ? '<button class="btn btn-primary" data-action="new-order">Оформить новый заказ</button>'
+      : '') +
     chatButton('Чат с продавцом') +
+    (order.status === 'done'
+      ? '<button class="btn btn-danger btn-sm" data-action="order-close">Закрыть заказ</button>'
+      : '') +
     '<button class="btn btn-ghost" data-action="order-help">Помощь по заказу</button>'
   );
 }
 
 function viewOrder() {
   const order = state.boot.order;
+  // Готовый заказ не должен закрывать дорогу новому.
+  if (state.newOrder) return viewCheckout();
   if (!order || (!order.isOpen && order.status !== 'done')) return viewCheckout();
   if (order.status === 'new') return viewPayment(order);
   if (order.status === 'payment_check') return viewWaitingPayment(order);
@@ -466,9 +514,11 @@ function viewHelp() {
         'Оплата → вы присылаете UDID → продавец ставит сертификат → вы получаете инструкцию.' +
       '</div></details>' +
       '<details class="disclosure"><summary>Где найти UDID?</summary><div class="body">' +
-        'Подключите iPhone к компьютеру: Finder на macOS или iTunes на Windows → нажмите ' +
-        'на серийный номер устройства, он сменится на UDID из 40 символов.' +
-      '</div></details>' +
+        'Без компьютера: откройте в Safari сайт udid.tech, нажмите Get My UDID, ' +
+        'установите профиль в Настройках — и страница покажет ваш UDID.' +
+      '</div>' +
+      '<img class="guide" src="/static/img/udid-guide.webp" loading="lazy" ' +
+        'alt="Как узнать UDID на iPhone: пошаговые экраны"></details>' +
       '<details class="disclosure"><summary>Что с моими данными?</summary><div class="body">' +
         esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и UDID.' +
       '</div></details>' +
@@ -518,7 +568,7 @@ function viewSellerOrder(o) {
       '<div class="row"><span class="label">Telegram ID</span><span class="value mono">' + esc(o.userId) + '</span></div>' +
       '<div class="row"><span class="label">Сумма</span><span class="value">' + esc(o.priceText) + '</span></div>' +
       '<div class="row"><span class="label">UDID</span><span class="value mono">' + esc(o.udid || '—') + '</span></div>' +
-      '<div class="row"><span class="label">Создан</span><span class="value">' + esc((o.createdAt || '').replace('T', ' ').slice(0, 16)) + '</span></div>' +
+      '<div class="row"><span class="label">Создан</span><span class="value">' + esc(dateOf(o.createdAt)) + '</span></div>' +
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
       sellerActions(o) +
     '</div>' +
@@ -530,7 +580,10 @@ function viewSellerOrder(o) {
     '<button class="btn btn-secondary" data-action="seller-notify">🔔 Уведомления по заказу</button>' +
     '<button class="btn btn-secondary mt" data-action="seller-chat">💬 Переписка' +
       (o.unread ? ' <span class="count-badge">' + o.unread + '</span>' : '') + '</button>' +
-    (o.isOpen ? '<button class="btn btn-danger btn-sm mt" data-action="seller-act:cancel">Отменить заказ</button>' : '')
+    (o.status !== 'cancelled'
+      ? '<button class="btn btn-danger btn-sm mt" data-action="seller-act:cancel">' +
+        (o.status === 'done' ? 'Закрыть заказ' : 'Отменить заказ') + '</button>'
+      : '')
   );
 }
 
@@ -739,6 +792,7 @@ const actions = {
   'buy': () => guard(async () => {
     const data = await api('/api/order/create', { method: 'POST' });
     state.boot.order = data.order;
+    state.newOrder = false;
     state.view = 'order';
     toast('Заказ ' + data.order.code + ' создан');
     render();
@@ -811,6 +865,34 @@ const actions = {
     toast('Обновлено');
     render();
   }),
+
+  'back-to-order': () => { state.newOrder = false; render(); },
+
+  'new-order': () => {
+    state.newOrder = true;
+    state.agreeTerms = false;
+    state.view = 'order';
+    render();
+  },
+
+  'open-udid-site': () => {
+    if (tg && tg.openLink) tg.openLink('https://udid.tech');
+    else window.open('https://udid.tech', '_blank');
+  },
+
+  'order-close': () => confirmAction(
+    'Закрыть заказ? Он пропадёт с экрана, а инструкция останется в чате бота.',
+    () => guard(async () => {
+      const data = await api('/api/order/cancel', {
+        method: 'POST',
+        body: { orderId: state.boot.order.id },
+      });
+      state.boot.order = data.order;
+      state.newOrder = false;
+      toast('Заказ закрыт');
+      render();
+    })
+  ),
 
   'order-cancel': () => guard(async () => {
     const data = await api('/api/order/cancel', { method: 'POST', body: { orderId: state.boot.order.id } });

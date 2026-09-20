@@ -77,6 +77,13 @@ def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
     wa = webapp_button(cfg, "Открыть приложение")
     if wa:
         rows.append([wa])
+    if status == const.DONE:
+        rows.append(
+            [InlineKeyboardButton(text="Оформить новый заказ", callback_data="nav:buy")]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="Закрыть заказ", callback_data=cb("cancel", order["id"]))]
+        )
     rows.append([InlineKeyboardButton(text="💬 Написать продавцу", callback_data="nav:chat")])
     rows.append(
         [
@@ -114,8 +121,15 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🔔", callback_data=cb("bell", oid)),
         ]
     )
-    if status in const.OPEN_STATUSES:
-        rows.append([InlineKeyboardButton(text="🚫 Отменить заказ", callback_data=cb("scancel", oid))])
+    if status != const.CANCELLED:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🗂 Закрыть заказ" if status == const.DONE else "🚫 Отменить заказ",
+                    callback_data=cb("scancel", oid),
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

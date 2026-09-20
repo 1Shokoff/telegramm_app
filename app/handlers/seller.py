@@ -92,7 +92,7 @@ async def cmd_stats(message: Message) -> None:
 async def cmd_find(message: Message, command: CommandObject) -> None:
     query = (command.args or "").strip()
     if not query:
-        await message.answer("Использование: /find NP-0001 или /find 4901542 или /find username")
+        await message.answer("Использование: /find NP-0001, /find 2b6f0cc9 или /find username")
         return
     orders = await db.list_orders(query=query, limit=10)
     if not orders:
@@ -129,7 +129,7 @@ async def cmd_log(message: Message, command: CommandObject) -> None:
     for ev in reversed(events):
         lines.append(
             "%s · %s · %s"
-            % (ev["created_at"].replace("T", " ")[5:16], texts.e(ev["type"]), texts.e(ev["actor"]))
+            % (texts.when(ev["created_at"]), texts.e(ev["type"]), texts.e(ev["actor"]))
         )
     await message.answer("\n".join(lines))
 
@@ -185,7 +185,8 @@ async def cmd_sellerhelp(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("o:card:"))
-async def cb_card(call: CallbackQuery) -> None:
+async def cb_card(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     parsed = keyboards.parse_cb(call.data)
     if not parsed:
         return

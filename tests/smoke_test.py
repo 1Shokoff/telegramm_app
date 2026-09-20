@@ -264,6 +264,40 @@ async def test_notify(cfg, bot: FakeBot, svc: OrderService) -> None:
     await svc.cancel(order["id"], "test", by_seller=True)
 
 
+async def test_close_and_reorder(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nЗакрытие заказа и следующий заказ")
+    order, _ = await svc.get_or_create_order(BUYER)
+
+    order = await svc.confirm_payment(order["id"], "test")
+    try:
+        await svc.cancel(order["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
+        check("заказ в работе покупатель не отменяет", False)
+    except ServiceError:
+        check("заказ в работе покупатель не отменяет", True)
+
+    order = await svc.submit_udid(order["id"], udid_mod.TEST_UDID, BUYER)
+    order = await svc.mark_installed(order["id"], "test")
+    order = await svc.send_instruction(order["id"], "Готовая инструкция", "test")
+    check("заказ выполнен", order["status"] == const.DONE)
+
+    same, created = await svc.get_or_create_order(BUYER)
+    check("выполненный заказ не мешает новому", created and same["id"] != order["id"])
+    await svc.cancel(same["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
+
+    closed = await svc.cancel(order["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
+    check("выполненный заказ закрывается покупателем", closed["status"] == const.CANCELLED)
+
+    try:
+        await svc.cancel(order["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
+        check("повторное закрытие отклоняется", False)
+    except ServiceError:
+        check("повторное закрытие отклоняется", True)
+
+    events = await db.list_events(order["id"], limit=5)
+    check("в истории видно, что заказ закрыт, а не отменён",
+          any(ev["detail"] == "закрыт" for ev in events))
+
+
 async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nHTTP API Mini App")
     app = build_app(cfg, bot, svc)
@@ -434,6 +468,7 @@ async def main() -> int:
     await test_api(cfg, bot, svc)
     await test_chat(cfg, bot, svc)
     await test_notify(cfg, bot, svc)
+    await test_close_and_reorder(cfg, bot, svc)
 
     await db.close()
 

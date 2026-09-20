@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape
 
 from . import const, udid as udid_mod
@@ -15,6 +16,17 @@ def money(rub: int) -> str:
 
 def e(value: object) -> str:
     return escape(str(value if value is not None else ""), quote=False)
+
+
+def when(iso: str) -> str:
+    """Метки времени в базе в UTC — показываем во времени сервера."""
+    try:
+        moment = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return e(iso or "")
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().strftime("%d.%m %H:%M")
 
 
 def user_line(order: dict) -> str:
@@ -87,7 +99,7 @@ def seller_order_card(order: dict) -> str:
         lines.append("Платёж: <code>%s</code>" % e(order["payment_ref"]))
     if order.get("seller_note"):
         lines.append("Заметка: %s" % e(order["seller_note"]))
-    lines.append("Создан: %s" % e(order["created_at"].replace("T", " ")[:16]))
+    lines.append("Создан: %s" % when(order["created_at"]))
     return "\n".join(lines)
 
 
@@ -118,19 +130,26 @@ def payment_instructions(order: dict, details: str) -> str:
     ) % (e(order["code"]), money(order["price_rub"]), body, e(order["code"]))
 
 
-def udid_request() -> str:
-    return (
-        "<b>Теперь добавьте iPhone</b>\n\n"
+def udid_request(guide_url: str = "") -> str:
+    lines = [
+        "<b>Теперь добавьте iPhone</b>",
+        "",
         "Нужен <b>UDID</b> — идентификатор устройства из 40 символов "
-        "(цифры и латинские буквы от a до f).\n\n"
-        "<b>Где его взять</b>\n"
-        "Подключите iPhone к компьютеру кабелем.\n"
-        "• macOS: Finder → ваш iPhone → строка под именем устройства. "
-        "Нажимайте на неё, пока не появится UDID, затем правый клик → «Скопировать».\n"
-        "• Windows: iTunes → значок устройства → «Обзор» → нажмите на «Серийный номер», "
-        "он сменится на UDID, затем правый клик → «Скопировать».\n\n"
-        "Отправьте номер сообщением в этот чат."
-    )
+        "(цифры и латинские буквы от a до f).",
+        "",
+        "<b>Как узнать UDID прямо на iPhone, без компьютера</b>",
+        "1. Откройте в Safari сайт <b>udid.tech</b>",
+        "2. Нажмите <b>Get My UDID</b> → <b>Разрешить</b> загрузку профиля",
+        "3. Зайдите в <b>Настройки → Профиль загружен → Установить</b>. "
+        "Если попросит — введите код-пароль iPhone",
+        "4. После установки откроется страница с вашим UDID — скопируйте его",
+        "",
+        "Отправьте номер сообщением в этот чат.",
+    ]
+    if guide_url:
+        lines.append("")
+        lines.append('<a href="%s">Инструкция со скриншотами</a>' % e(guide_url))
+    return "\n".join(lines)
 
 
 def udid_accepted(order: dict) -> str:
@@ -178,7 +197,7 @@ def chat_history(order: dict, messages: list[dict]) -> str:
         who = "Продавец" if msg["author"] == "seller" else "Покупатель"
         lines.append(
             "<b>%s</b> · %s\n%s"
-            % (who, e(msg["created_at"].replace("T", " ")[5:16]), e(msg["text"]))
+            % (who, when(msg["created_at"]), e(msg["text"]))
         )
     return "\n\n".join(lines)
 

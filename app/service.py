@@ -144,7 +144,7 @@ class OrderService:
         assert updated
         await self.send(
             updated["user_id"],
-            "✅ <b>Оплата получена</b>\n\n" + texts.udid_request(),
+            "✅ <b>Оплата получена</b>\n\n" + texts.udid_request(self.cfg.udid_guide_url),
             keyboards.buyer_order_kb(self.cfg, updated),
             kind=const.NOTIFY_STATUS,
             order_id=order_id,
@@ -221,24 +221,31 @@ class OrderService:
         order = await self._load(order_id)
         if not by_seller and actor_id is not None and order["user_id"] != actor_id:
             raise ServiceError("Это не ваш заказ.")
-        if order["status"] not in const.OPEN_STATUSES:
-            raise ServiceError("Заказ уже закрыт.")
-        if not by_seller and order["status"] not in (const.NEW, const.PAYMENT_CHECK):
-            raise ServiceError("Оплаченный заказ отменяет продавец — напишите в помощь.")
+        if order["status"] == const.CANCELLED:
+            raise ServiceError("Заказ уже отменён.")
+        # Выполненный заказ покупатель вправе закрыть сам — это освобождает место
+        # под новый. Заказ в работе останавливает только продавец.
+        if not by_seller and order["status"] not in (const.NEW, const.PAYMENT_CHECK, const.DONE):
+            raise ServiceError("Заказ в работе отменяет продавец — напишите ему в переписке.")
 
-        updated = await db.set_status(order_id, const.CANCELLED, actor, "отменён")
+        was_done = order["status"] == const.DONE
+        updated = await db.set_status(
+            order_id, const.CANCELLED, actor, "закрыт" if was_done else "отменён"
+        )
         assert updated
         if by_seller:
             await self.send(
                 updated["user_id"],
-                "Заказ <b>%s</b> отменён продавцом. Новый можно оформить командой /start."
-                % texts.e(updated["code"]),
+                "Заказ <b>%s</b> %s. Новый можно оформить командой /start."
+                % (texts.e(updated["code"]), "закрыт продавцом" if was_done else "отменён продавцом"),
                 kind=const.NOTIFY_STATUS,
                 order_id=order_id,
             )
         else:
             await self.push_order_to_sellers(
-                updated, "🚫 <b>Покупатель отменил заказ</b>", const.NOTIFY_STATUS
+                updated,
+                "🗂 <b>Покупатель закрыл заказ</b>" if was_done else "🚫 <b>Покупатель отменил заказ</b>",
+                const.NOTIFY_STATUS,
             )
         return updated
 

@@ -592,3 +592,11 @@ body.chat-mode .view { padding-bottom: 110px; }
 }
 .switch:checked { background: var(--ok); border-color: transparent; }
 .switch:checked::after { transform: translateX(20px); background: #fff; }
+
+.guide {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-m);
+  margin-top: 12px;
+  border: 1px solid var(--line);
+}

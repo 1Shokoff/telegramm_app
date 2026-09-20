@@ -90,6 +90,13 @@ class Config:
     def webapp_enabled(self) -> bool:
         return self.webapp_url.startswith("https://")
 
+    @property
+    def udid_guide_url(self) -> str:
+        """Картинка-инструкция лежит в статике Mini App; без домена её нет."""
+        if not self.webapp_enabled:
+            return ""
+        return self.webapp_url + "/static/img/udid-guide.webp"
+
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
 

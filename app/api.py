@@ -101,6 +101,14 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
     return data
 
 
+def order_id_of(data: dict) -> int:
+    """Мусор в orderId — это ошибка запроса, а не падение сервера."""
+    try:
+        return int(data.get("orderId", 0))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный orderId")
+
+
 def message_public(message: dict, viewer: str) -> dict:
     return {
         "id": message["id"],
@@ -187,7 +195,7 @@ async def create_order(request: web.Request) -> web.Response:
 async def claim(request: web.Request) -> web.Response:
     user = await current_user(request)
     data = await body(request)
-    order = await service_of(request).claim_payment(int(data.get("orderId", 0)), user.id)
+    order = await service_of(request).claim_payment(order_id_of(data), user.id)
     return web.json_response({"order": order_public(order)})
 
 
@@ -198,7 +206,7 @@ async def demopay(request: web.Request) -> web.Response:
         raise ApiError("Демо-оплата выключена")
     user = await current_user(request)
     data = await body(request)
-    order_id = int(data.get("orderId", 0))
+    order_id = order_id_of(data)
     order = await db.get_order(order_id)
     if not order or order["user_id"] != user.id:
         raise ApiError("Это не ваш заказ", status=403)
@@ -215,7 +223,7 @@ async def invoice(request: web.Request) -> web.Response:
 
     user = await current_user(request)
     data = await body(request)
-    order = await db.get_order(int(data.get("orderId", 0)))
+    order = await db.get_order(order_id_of(data))
     if not order or order["user_id"] != user.id:
         raise ApiError("Это не ваш заказ", status=403)
     link = await payments.create_invoice_link(request.app["bot"], cfg, order)
@@ -227,7 +235,7 @@ async def submit_udid(request: web.Request) -> web.Response:
     user = await current_user(request)
     data = await body(request)
     order = await service_of(request).submit_udid(
-        int(data.get("orderId", 0)), str(data.get("udid", "")), user.id
+        order_id_of(data), str(data.get("udid", "")), user.id
     )
     return web.json_response({"order": order_public(order)})
 
@@ -238,7 +246,7 @@ async def get_chat(request: web.Request) -> web.Response:
     role = viewer_role(request, user)
     try:
         order_id = int(request.query.get("orderId", 0))
-    except ValueError:
+    except (TypeError, ValueError):
         raise ApiError("Некорректный orderId")
 
     messages = await service_of(request).read_chat(order_id, user.id, role == db.SELLER)
@@ -253,7 +261,7 @@ async def post_chat(request: web.Request) -> web.Response:
     role = viewer_role(request, user)
     data = await body(request)
     message = await service_of(request).post_message(
-        int(data.get("orderId", 0)), str(data.get("text", "")), user.id, role == db.SELLER
+        order_id_of(data), str(data.get("text", "")), user.id, role == db.SELLER
     )
     return web.json_response({"message": message_public(message, role)})
 
@@ -290,7 +298,10 @@ async def get_notify(request: web.Request) -> web.Response:
     order = None
     raw_order = request.query.get("orderId")
     if raw_order:
-        order = await db.get_order(int(raw_order))
+        try:
+            order = await db.get_order(int(raw_order))
+        except (TypeError, ValueError):
+            raise ApiError("Некорректный orderId")
         if order and not is_seller and order["user_id"] != user.id:
             raise ApiError("Это не ваш заказ", status=403)
     elif not is_seller:
@@ -320,7 +331,7 @@ async def set_notify_order(request: web.Request) -> web.Response:
     is_seller = cfg_of(request).is_seller(user.id)
     data = await body(request)
 
-    order = await db.get_order(int(data.get("orderId", 0)))
+    order = await db.get_order(order_id_of(data))
     if not order:
         raise ApiError("Заказ не найден")
     if not is_seller and order["user_id"] != user.id:
@@ -340,7 +351,7 @@ async def cancel(request: web.Request) -> web.Response:
     user = await current_user(request)
     data = await body(request)
     order = await service_of(request).cancel(
-        int(data.get("orderId", 0)), "user:%d" % user.id, by_seller=False, actor_id=user.id
+        order_id_of(data), "user:%d" % user.id, by_seller=False, actor_id=user.id
     )
     return web.json_response({"order": order_public(order)})
 
@@ -349,7 +360,7 @@ async def cancel(request: web.Request) -> web.Response:
 async def order_help(request: web.Request) -> web.Response:
     user = await current_user(request)
     data = await body(request)
-    order = await db.get_order(int(data.get("orderId", 0)))
+    order = await db.get_order(order_id_of(data))
     if not order or order["user_id"] != user.id:
         raise ApiError("Это не ваш заказ", status=403)
     await service_of(request).push_order_to_sellers(
@@ -404,7 +415,7 @@ async def seller_action(request: web.Request) -> web.Response:
     user = await require_seller(request)
     data = await body(request)
     action = str(data.get("action", ""))
-    order_id = int(data.get("orderId", 0))
+    order_id = order_id_of(data)
     actor = "seller:%d" % user.id
     svc = service_of(request)
 
