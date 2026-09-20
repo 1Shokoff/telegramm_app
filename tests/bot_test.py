@@ -210,11 +210,24 @@ async def main() -> int:
     await dp.feed_update(bot, message_update(SELLER, "/stats"))
     check("/stats отвечает", any("статус" in t.lower() for t in bot.texts_to(SELLER)))
 
+    print("\nУведомления")
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/notify"))
+    check("/notify показывает настройки",
+          any("Уведомления" in t for t in bot.texts_to(BUYER)))
+    await dp.feed_update(bot, callback_update(BUYER, "nt:%s" % const.NOTIFY_STATUS))
+    prefs = await db.get_notify_prefs(BUYER)
+    check("кнопка выключает вид", prefs.get(const.NOTIFY_STATUS) is False)
+    await dp.feed_update(bot, callback_update(BUYER, "nt:%s" % const.NOTIFY_STATUS))
+    prefs = await db.get_notify_prefs(BUYER)
+    check("повторное нажатие включает обратно", prefs.get(const.NOTIFY_STATUS) is True)
+
     print("\nУдаление данных")
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/forget"))
     check("данные удалены", await db.get_user(BUYER) is None)
     check("заказы удалены каскадом", await db.get_active_order(BUYER) is None)
+    check("настройки уведомлений удалены", await db.get_notify_prefs(BUYER) == {})
 
     await db.close()
     await bot.session.close()

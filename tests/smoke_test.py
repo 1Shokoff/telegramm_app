@@ -220,6 +220,50 @@ async def test_chat(cfg, bot: FakeBot, svc: OrderService) -> None:
     await svc.cancel(order["id"], "test", by_seller=True)
 
 
+async def test_notify(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nНастройки уведомлений")
+    order, _ = await svc.get_or_create_order(BUYER)
+
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Первый вопрос", BUYER, from_seller=False)
+    check("по умолчанию уведомление приходит", any("Первый" in t for t in bot.to(SELLER)))
+
+    await db.set_notify_pref(SELLER, const.NOTIFY_CHAT, False)
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Второй вопрос", BUYER, from_seller=False)
+    check("выключенный вид молчит", not any("Второй" in t for t in bot.to(SELLER)))
+
+    await db.set_order_notify(SELLER, order["id"], True)
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Третий вопрос", BUYER, from_seller=False)
+    check("«всегда уведомлять» сильнее общего выключения",
+          any("Третий" in t for t in bot.to(SELLER)))
+
+    await db.set_notify_pref(SELLER, const.NOTIFY_CHAT, True)
+    await db.set_order_notify(SELLER, order["id"], False)
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Четвёртый вопрос", BUYER, from_seller=False)
+    check("«не беспокоить» сильнее общего включения",
+          not any("Четвёртый" in t for t in bot.to(SELLER)))
+
+    await db.set_order_notify(SELLER, order["id"], None)
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Пятый вопрос", BUYER, from_seller=False)
+    check("после сброса снова приходит", any("Пятый" in t for t in bot.to(SELLER)))
+
+    await db.set_notify_pref(BUYER, const.NOTIFY_STATUS, False)
+    bot.sent.clear()
+    await svc.confirm_payment(order["id"], "test")
+    check("покупатель не получил выключенный статус",
+          not any("Оплата получена" in t for t in bot.to(BUYER)))
+
+    await db.set_notify_pref(BUYER, const.NOTIFY_STATUS, True)
+    check("сообщения переписки не зависят от статуса",
+          (await db.get_notify_prefs(BUYER))[const.NOTIFY_STATUS] is True)
+
+    await svc.cancel(order["id"], "test", by_seller=True)
+
+
 async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nHTTP API Mini App")
     app = build_app(cfg, bot, svc)
@@ -325,6 +369,40 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         check("несуществующий заказ — ошибка", res.status == 400)
 
+        res = await client.get("/api/notify", headers=buyer_headers)
+        data = await res.json()
+        check("настройки покупателя отдаются",
+              len(data["kinds"]) == 2 and all(k["enabled"] for k in data["kinds"]))
+
+        res = await client.post(
+            "/api/notify", headers=buyer_headers,
+            json={"kind": const.NOTIFY_STATUS, "enabled": False},
+        )
+        data = await res.json()
+        check("переключатель сохраняется",
+              any(k["key"] == const.NOTIFY_STATUS and not k["enabled"] for k in data["kinds"]))
+
+        res = await client.post(
+            "/api/notify", headers=buyer_headers,
+            json={"kind": const.NOTIFY_NEW_ORDER, "enabled": False},
+        )
+        check("чужой вид уведомления отклонён", res.status == 400)
+
+        res = await client.post(
+            "/api/notify/order", headers=buyer_headers,
+            json={"orderId": order["id"], "mode": const.ORDER_NOTIFY_OFF},
+        )
+        check("режим заказа сохраняется",
+              (await res.json())["order"]["mode"] == const.ORDER_NOTIFY_OFF)
+
+        res = await client.get("/api/notify", headers=seller_headers)
+        check("у продавца свой набор видов", len((await res.json())["kinds"]) == 5)
+
+        await client.post(
+            "/api/notify", headers=buyer_headers,
+            json={"kind": const.NOTIFY_STATUS, "enabled": True},
+        )
+
         res = await client.get("/health")
         check("healthcheck отвечает", res.status == 200)
 
@@ -355,6 +433,7 @@ async def main() -> int:
     await test_service(cfg, bot, svc)
     await test_api(cfg, bot, svc)
     await test_chat(cfg, bot, svc)
+    await test_notify(cfg, bot, svc)
 
     await db.close()
 

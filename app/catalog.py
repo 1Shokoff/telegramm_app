@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+ICONS_DIR = Path(__file__).resolve().parent.parent / "webapp" / "icons"
+# Порядок = приоритет: свой PNG перекроет сгенерированный SVG.
+ICON_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
+
 # Каталог для витрины Mini App и списка в чате.
-#   slug  — идентификатор, он же имя файла иконки: webapp/icons/<slug>.png
-#   color — фон плитки, если картинки нет
-#   dark  — True, если поверх цвета нужен чёрный текст (жёлтые/светлые плитки)
+#   slug  — идентификатор, он же имя файла иконки: webapp/icons/<slug>.*
+#   color — фон плитки и сгенерированной иконки
+#   dark  — True, если поверх цвета нужен чёрный знак (жёлтые/светлые плитки)
 #
-# Иконки не входят в репозиторий: положите свои PNG 128×128 в webapp/icons/
-# и они подхватятся автоматически, без пересборки образа.
+# В webapp/icons/ лежат сгенерированные SVG (tools/make_icons.py). Свой файл
+# <slug>.png кладётся рядом и перекрывает их — пересборка образа не нужна.
 
 CATEGORIES = ("Банки", "Общение", "Нейросети", "Покупки", "Сервисы", "Медиа")
 
@@ -14,7 +20,7 @@ APPS = [
     {"slug": "sber", "name": "СберБанк", "category": "Банки", "color": "#21A038"},
     {"slug": "alfa", "name": "Альфа-Банк", "category": "Банки", "color": "#EF3124"},
     {"slug": "vk", "name": "ВКонтакте", "category": "Общение", "color": "#0077FF"},
-    {"slug": "chatgpt", "name": "ChatGPT", "category": "Нейросети", "color": "#0D0D0D"},
+    {"slug": "chatgpt", "name": "ChatGPT", "category": "Нейросети", "color": "#10A37F"},
     {"slug": "claude", "name": "Claude", "category": "Нейросети", "color": "#D97757"},
     {"slug": "avito", "name": "Авито", "category": "Покупки", "color": "#00AAFF"},
     {"slug": "tbank", "name": "Т-Банк", "category": "Банки", "color": "#FFDD2D", "dark": True},
@@ -45,7 +51,23 @@ def _letter(name: str) -> str:
     return name[0].upper()
 
 
+def icon_files() -> dict[str, str]:
+    """Какая картинка лежит для каждого слага. Файл можно добавить на лету."""
+    found: dict[str, str] = {}
+    if not ICONS_DIR.is_dir():
+        return found
+    names = {p.name for p in ICONS_DIR.iterdir() if p.is_file()}
+    for app in APPS:
+        for ext in ICON_EXTENSIONS:
+            candidate = app["slug"] + ext
+            if candidate in names:
+                found[app["slug"]] = candidate
+                break
+    return found
+
+
 def public_catalog() -> list[dict]:
+    icons = icon_files()
     return [
         {
             "slug": a["slug"],
@@ -54,6 +76,7 @@ def public_catalog() -> list[dict]:
             "color": a["color"],
             "dark": bool(a.get("dark")),
             "letter": _letter(a["name"]),
+            "icon": icons.get(a["slug"]),
         }
         for a in APPS
     ]

@@ -68,6 +68,20 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_order ON messages(order_id, id);
+
+CREATE TABLE IF NOT EXISTS notify_prefs (
+    user_id INTEGER NOT NULL,
+    kind    TEXT    NOT NULL,
+    enabled INTEGER NOT NULL,
+    PRIMARY KEY (user_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS notify_order_prefs (
+    user_id  INTEGER NOT NULL,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    enabled  INTEGER NOT NULL,
+    PRIMARY KEY (user_id, order_id)
+);
 """
 
 
@@ -299,8 +313,13 @@ async def set_note(order_id: int, note: str) -> None:
 
 
 async def purge_user(user_id: int) -> int:
-    """Удаляет пользователя вместе с заказами — по команде /forget."""
+    """Удаляет пользователя вместе с заказами — по команде /forget.
+
+    Заказы, сообщения и настройки по заказам уходят каскадом, общие
+    настройки уведомлений связаны с пользователем только по id — их чистим сами.
+    """
     cur = await conn().execute("DELETE FROM users WHERE tg_id = ?", (user_id,))
+    await conn().execute("DELETE FROM notify_prefs WHERE user_id = ?", (user_id,))
     await conn().commit()
     return cur.rowcount or 0
 
@@ -381,6 +400,59 @@ async def unread_count(order_id: int, viewer: str) -> int:
         (order_id,),
     )
     return int(row["n"]) if row else 0
+
+
+# ----------------------------------------------------------- уведомления
+
+
+async def get_notify_prefs(user_id: int) -> dict[str, bool]:
+    """Только явно изменённые виды; остальные включены по умолчанию."""
+    rows = await _fetchall("SELECT kind, enabled FROM notify_prefs WHERE user_id = ?", (user_id,))
+    return {r["kind"]: bool(r["enabled"]) for r in rows}
+
+
+async def set_notify_pref(user_id: int, kind: str, enabled: bool) -> None:
+    await conn().execute(
+        """
+        INSERT INTO notify_prefs (user_id, kind, enabled) VALUES (?, ?, ?)
+        ON CONFLICT(user_id, kind) DO UPDATE SET enabled = excluded.enabled
+        """,
+        (user_id, kind, 1 if enabled else 0),
+    )
+    await conn().commit()
+
+
+async def get_order_notify(user_id: int, order_id: int) -> bool | None:
+    """True/False — заказ настроен отдельно, None — действуют общие настройки."""
+    row = await _fetchone(
+        "SELECT enabled FROM notify_order_prefs WHERE user_id = ? AND order_id = ?",
+        (user_id, order_id),
+    )
+    return bool(row["enabled"]) if row else None
+
+
+async def set_order_notify(user_id: int, order_id: int, enabled: bool | None) -> None:
+    if enabled is None:
+        await conn().execute(
+            "DELETE FROM notify_order_prefs WHERE user_id = ? AND order_id = ?",
+            (user_id, order_id),
+        )
+    else:
+        await conn().execute(
+            """
+            INSERT INTO notify_order_prefs (user_id, order_id, enabled) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, order_id) DO UPDATE SET enabled = excluded.enabled
+            """,
+            (user_id, order_id, 1 if enabled else 0),
+        )
+    await conn().commit()
+
+
+async def order_notify_map(user_id: int) -> dict[int, bool]:
+    rows = await _fetchall(
+        "SELECT order_id, enabled FROM notify_order_prefs WHERE user_id = ?", (user_id,)
+    )
+    return {int(r["order_id"]): bool(r["enabled"]) for r in rows}
 
 
 async def unread_by_order(viewer: str) -> dict[int, int]:

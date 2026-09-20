@@ -16,6 +16,7 @@ const state = {
   busy: false,
   seller: { status: 'open', q: '', orders: [], counts: {}, current: null, instruction: '' },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
+  notify: { kinds: [], order: null, modes: [], from: 'help' },
 };
 
 const STEP_LABELS = [
@@ -74,10 +75,13 @@ function appBySlug(slug) {
 function iconHtml(app, extraClass) {
   if (!app) return '';
   const cls = 'app-icon' + (app.dark ? ' dark' : '') + (extraClass ? ' ' + extraClass : '');
+  // Файл иконки называет сервер: буква остаётся запасным вариантом.
+  const img = app.icon
+    ? '<img src="/static/icons/' + esc(app.icon) + '" alt="" loading="lazy" onerror="this.remove()">'
+    : '';
   return (
     '<div class="' + cls + '" style="background:' + esc(app.color) + '">' +
-    '<span>' + esc(app.letter) + '</span>' +
-    '<img src="/static/icons/' + esc(app.slug) + '.png" alt="" loading="lazy" onerror="this.remove()">' +
+    '<span>' + esc(app.letter) + '</span>' + img +
     '</div>'
   );
 }
@@ -290,6 +294,56 @@ function chatMessagesHtml() {
   )).join('');
 }
 
+function viewNotify() {
+  const n = state.notify;
+  return (
+    '<button class="backlink" data-action="notify-back">← Назад</button>' +
+    '<h1>Уведомления</h1>' +
+    '<p class="muted">Что присылать в чат бота. Статус заказа и инструкция ' +
+      'остаются в приложении, даже если всё выключить.</p>' +
+    '<div class="card">' +
+      (n.kinds.length ? n.kinds.map((k) => (
+        '<label class="switch-row">' +
+          '<span class="switch-text">' +
+            '<span class="switch-title">' + esc(k.title) + '</span>' +
+            '<span class="switch-hint">' + esc(k.hint) + '</span>' +
+          '</span>' +
+          '<input type="checkbox" class="switch" data-toggle="' + esc(k.key) + '"' +
+            (k.enabled ? ' checked' : '') + '>' +
+        '</label>'
+      )).join('') : '<div class="muted">Загружаем…</div>') +
+    '</div>' +
+    (n.order
+      ? '<div class="section-head"><h2>Заказ ' + esc(n.order.code) + '</h2></div>' +
+        '<div class="card">' +
+          '<p class="muted">Настройка по этому заказу сильнее общей.</p>' +
+          '<div class="filters">' + n.modes.map((m) => (
+            '<div class="chip' + (m.key === n.order.mode ? ' active' : '') +
+            '" data-action="notify-mode:' + esc(m.key) + '">' + esc(m.title) + '</div>'
+          )).join('') + '</div>' +
+        '</div>'
+      : '')
+  );
+}
+
+async function loadNotify(orderId) {
+  const query = orderId ? '?orderId=' + orderId : '';
+  const data = await api('/api/notify' + query);
+  state.notify.kinds = data.kinds;
+  state.notify.order = data.order;
+  state.notify.modes = data.modes;
+}
+
+function openNotify(orderId, from) {
+  state.notify.from = from || 'help';
+  state.view = 'notify';
+  render();
+  guard(async () => {
+    await loadNotify(orderId);
+    render();
+  });
+}
+
 function viewChat() {
   return (
     '<button class="backlink" data-action="chat-back">← Назад</button>' +
@@ -418,6 +472,7 @@ function viewHelp() {
       '<details class="disclosure"><summary>Что с моими данными?</summary><div class="body">' +
         esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и UDID.' +
       '</div></details>' +
+      '<button class="btn btn-secondary" data-action="notify">🔔 Настроить уведомления</button>' +
       support +
     '</div>'
   );
@@ -472,7 +527,8 @@ function viewSellerOrder(o) {
         '<textarea id="instrText" placeholder="Что сделать покупателю после установки…">' + esc(state.seller.instruction) + '</textarea></label>' +
         '<button class="btn btn-primary mt" data-action="seller-send-instr">Отправить покупателю</button></div>'
       : '') +
-    '<button class="btn btn-secondary" data-action="seller-chat">💬 Переписка' +
+    '<button class="btn btn-secondary" data-action="seller-notify">🔔 Уведомления по заказу</button>' +
+    '<button class="btn btn-secondary mt" data-action="seller-chat">💬 Переписка' +
       (o.unread ? ' <span class="count-badge">' + o.unread + '</span>' : '') + '</button>' +
     (o.isOpen ? '<button class="btn btn-danger btn-sm mt" data-action="seller-act:cancel">Отменить заказ</button>' : '')
   );
@@ -536,7 +592,7 @@ function render() {
 
   const views = {
     home: viewHome, apps: viewApps, order: viewOrder,
-    help: viewHelp, seller: viewSeller, chat: viewChat,
+    help: viewHelp, seller: viewSeller, chat: viewChat, notify: viewNotify,
   };
   document.body.classList.toggle('chat-mode', state.view === 'chat');
   root.innerHTML = (views[state.view] || viewHome)();
@@ -557,7 +613,8 @@ function render() {
 
 function updateBackButton() {
   if (!tg || !tg.BackButton) return;
-  const nested = state.view === 'chat' || (state.view === 'seller' && state.seller.current);
+  const nested = state.view === 'chat' || state.view === 'notify'
+    || (state.view === 'seller' && state.seller.current);
   if (nested || (state.view !== 'home' && state.view !== 'order')) tg.BackButton.show();
   else tg.BackButton.hide();
 }
@@ -607,6 +664,18 @@ function bindInputs() {
       timer = setTimeout(() => loadSellerOrders().then(render), 350);
     });
   }
+
+  document.querySelectorAll('[data-toggle]').forEach((box) => {
+    box.addEventListener('change', () => {
+      const kind = box.getAttribute('data-toggle');
+      const enabled = box.checked;
+      guard(async () => {
+        const data = await api('/api/notify', { method: 'POST', body: { kind, enabled } });
+        state.notify.kinds = data.kinds;
+        toast(enabled ? 'Уведомления включены' : 'Уведомления выключены');
+      });
+    });
+  });
 
   const chatInput = document.getElementById('chatInput');
   if (chatInput) {
@@ -790,6 +859,21 @@ const actions = {
     haptic('success');
   }),
 
+  'notify': () => {
+    const order = state.boot.order;
+    openNotify(order ? order.id : null, 'help');
+  },
+
+  'seller-notify': () => {
+    const current = state.seller.current;
+    if (current) openNotify(current.id, 'seller');
+  },
+
+  'notify-back': () => {
+    state.view = state.notify.from === 'seller' ? 'seller' : 'help';
+    render();
+  },
+
   'seller-back': () => { state.seller.current = null; render(); },
 
   'seller-instr': () => { state.seller.instruction = ''; render(); },
@@ -815,6 +899,19 @@ function handleAction(raw) {
     return;
   }
   if (kind === 'filter') { state.filter = value; render(); return; }
+  if (kind === 'notify-mode') {
+    guard(async () => {
+      const data = await api('/api/notify/order', {
+        method: 'POST',
+        body: { orderId: state.notify.order.id, mode: value },
+      });
+      state.notify.kinds = data.kinds;
+      state.notify.order = data.order;
+      render();
+      toast('Настройка заказа сохранена');
+    });
+    return;
+  }
   if (kind === 'seller-filter') {
     state.seller.status = value;
     guard(async () => { await loadSellerOrders(); render(); });

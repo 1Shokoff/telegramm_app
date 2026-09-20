@@ -258,6 +258,83 @@ async def post_chat(request: web.Request) -> web.Response:
     return web.json_response({"message": message_public(message, role)})
 
 
+async def notify_payload(user_id: int, is_seller: bool, order: dict | None) -> dict:
+    prefs = await db.get_notify_prefs(user_id)
+    kinds = [
+        {"key": key, "title": title, "hint": hint, "enabled": prefs.get(key, True)}
+        for key, title, hint in const.notifications_for(is_seller)
+    ]
+    order_block = None
+    if order:
+        override = await db.get_order_notify(user_id, order["id"])
+        mode = const.ORDER_NOTIFY_DEFAULT
+        if override is True:
+            mode = const.ORDER_NOTIFY_ON
+        elif override is False:
+            mode = const.ORDER_NOTIFY_OFF
+        order_block = {"id": order["id"], "code": order["code"], "mode": mode}
+    return {
+        "kinds": kinds,
+        "order": order_block,
+        "modes": [
+            {"key": key, "title": title} for key, title in const.ORDER_NOTIFY_TITLES.items()
+        ],
+    }
+
+
+@routes.get("/api/notify")
+async def get_notify(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    is_seller = cfg_of(request).is_seller(user.id)
+
+    order = None
+    raw_order = request.query.get("orderId")
+    if raw_order:
+        order = await db.get_order(int(raw_order))
+        if order and not is_seller and order["user_id"] != user.id:
+            raise ApiError("Это не ваш заказ", status=403)
+    elif not is_seller:
+        order = await db.get_active_order(user.id)
+
+    return web.json_response(await notify_payload(user.id, is_seller, order))
+
+
+@routes.post("/api/notify")
+async def set_notify(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    is_seller = cfg_of(request).is_seller(user.id)
+    data = await body(request)
+
+    kind = str(data.get("kind", ""))
+    allowed = {key for key, _t, _h in const.notifications_for(is_seller)}
+    if kind not in allowed:
+        raise ApiError("Неизвестный вид уведомления: %s" % kind)
+
+    await db.set_notify_pref(user.id, kind, bool(data.get("enabled")))
+    return web.json_response(await notify_payload(user.id, is_seller, None))
+
+
+@routes.post("/api/notify/order")
+async def set_notify_order(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    is_seller = cfg_of(request).is_seller(user.id)
+    data = await body(request)
+
+    order = await db.get_order(int(data.get("orderId", 0)))
+    if not order:
+        raise ApiError("Заказ не найден")
+    if not is_seller and order["user_id"] != user.id:
+        raise ApiError("Это не ваш заказ", status=403)
+
+    mode = str(data.get("mode", const.ORDER_NOTIFY_DEFAULT))
+    if mode not in const.ORDER_NOTIFY_TITLES:
+        raise ApiError("Неизвестный режим: %s" % mode)
+
+    enabled = {const.ORDER_NOTIFY_DEFAULT: None, const.ORDER_NOTIFY_ON: True, const.ORDER_NOTIFY_OFF: False}[mode]
+    await db.set_order_notify(user.id, order["id"], enabled)
+    return web.json_response(await notify_payload(user.id, is_seller, order))
+
+
 @routes.post("/api/order/cancel")
 async def cancel(request: web.Request) -> web.Response:
     user = await current_user(request)
@@ -275,7 +352,9 @@ async def order_help(request: web.Request) -> web.Response:
     order = await db.get_order(int(data.get("orderId", 0)))
     if not order or order["user_id"] != user.id:
         raise ApiError("Это не ваш заказ", status=403)
-    await service_of(request).push_order_to_sellers(order, "🆘 <b>Покупатель просит помощь</b>")
+    await service_of(request).push_order_to_sellers(
+        order, "🆘 <b>Покупатель просит помощь</b>", const.NOTIFY_HELP
+    )
     return web.json_response({"ok": True})
 
 

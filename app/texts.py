@@ -183,6 +183,30 @@ def chat_history(order: dict, messages: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def notify_screen(
+    items: tuple[tuple[str, str, str], ...],
+    prefs: dict[str, bool],
+    order: dict | None,
+    mode: str,
+) -> str:
+    lines = ["<b>Уведомления</b>", "Нажмите на пункт, чтобы включить или выключить.", ""]
+    for key, title, hint in items:
+        on = prefs.get(key, True)
+        lines.append("%s <b>%s</b>\n<i>%s</i>" % ("🔔" if on else "🔕", title, e(hint)))
+    if order:
+        lines.append("")
+        lines.append(
+            "<b>Заказ %s:</b> %s\n<i>Настройка по заказу сильнее общей.</i>"
+            % (e(order["code"]), e(const.ORDER_NOTIFY_TITLES[mode]))
+        )
+    lines.append("")
+    lines.append(
+        "<i>Статус заказа и инструкция всегда доступны в приложении, "
+        "даже если уведомления выключены.</i>"
+    )
+    return "\n".join(lines)
+
+
 CHAT_HINT_BUYER = (
     "Просто напишите сообщение в этот чат — продавец увидит его в карточке заказа "
     "и ответит здесь же."

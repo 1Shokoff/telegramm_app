@@ -77,9 +77,10 @@ def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
     wa = webapp_button(cfg, "Открыть приложение")
     if wa:
         rows.append([wa])
+    rows.append([InlineKeyboardButton(text="💬 Написать продавцу", callback_data="nav:chat")])
     rows.append(
         [
-            InlineKeyboardButton(text="💬 Написать продавцу", callback_data="nav:chat"),
+            InlineKeyboardButton(text="🔔 Уведомления", callback_data="nav:notify"),
             InlineKeyboardButton(text="Помощь", callback_data=cb("help", order["id"])),
         ]
     )
@@ -110,10 +111,41 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="💬 Написать", callback_data=cb("chat", oid)),
             InlineKeyboardButton(text="🔄 Обновить", callback_data=cb("card", oid)),
+            InlineKeyboardButton(text="🔔", callback_data=cb("bell", oid)),
         ]
     )
     if status in const.OPEN_STATUSES:
         rows.append([InlineKeyboardButton(text="🚫 Отменить заказ", callback_data=cb("scancel", oid))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def notify_kb(
+    items: tuple[tuple[str, str, str], ...],
+    prefs: dict[str, bool],
+    order: dict | None,
+    order_mode: str,
+) -> InlineKeyboardMarkup:
+    """Переключатели видов уведомлений и режим для текущего заказа."""
+    rows = []
+    for key, title, _hint in items:
+        on = prefs.get(key, True)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="%s %s" % ("🔔" if on else "🔕", title),
+                    callback_data="nt:%s" % key,
+                )
+            ]
+        )
+    if order:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Заказ %s: %s" % (order["code"], const.ORDER_NOTIFY_TITLES[order_mode]),
+                    callback_data="nto:%d" % order["id"],
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -25,9 +25,28 @@ class OrderService:
 
     # ------------------------------------------------------------ отправка
 
+    async def allowed(self, user_id: int, kind: str | None, order_id: int | None) -> bool:
+        """Настройка по конкретному заказу сильнее общей, по умолчанию всё включено."""
+        if kind is None:
+            return True
+        if order_id is not None:
+            override = await db.get_order_notify(user_id, order_id)
+            if override is not None:
+                return override
+        prefs = await db.get_notify_prefs(user_id)
+        return prefs.get(kind, True)
+
     async def send(
-        self, chat_id: int, text: str, kb: InlineKeyboardMarkup | None = None
+        self,
+        chat_id: int,
+        text: str,
+        kb: InlineKeyboardMarkup | None = None,
+        kind: str | None = None,
+        order_id: int | None = None,
     ) -> bool:
+        if not await self.allowed(chat_id, kind, order_id):
+            log.info("Уведомление %s для %s отключено настройками", kind, chat_id)
+            return False
         try:
             await self.bot.send_message(chat_id, text, reply_markup=kb)
             return True
@@ -38,14 +57,22 @@ class OrderService:
             log.warning("Не отправили сообщение %s: %s", chat_id, exc)
         return False
 
-    async def notify_sellers(self, text: str, kb: InlineKeyboardMarkup | None = None) -> None:
+    async def notify_sellers(
+        self,
+        text: str,
+        kb: InlineKeyboardMarkup | None = None,
+        kind: str | None = None,
+        order_id: int | None = None,
+    ) -> None:
         for seller_id in self.cfg.seller_ids:
-            await self.send(seller_id, text, kb)
+            await self.send(seller_id, text, kb, kind=kind, order_id=order_id)
 
-    async def push_order_to_sellers(self, order: dict, header: str) -> None:
+    async def push_order_to_sellers(self, order: dict, header: str, kind: str) -> None:
         full = await self._with_user(order)
         text = header + "\n\n" + texts.seller_order_card(full)
-        await self.notify_sellers(text, keyboards.seller_order_kb(order))
+        await self.notify_sellers(
+            text, keyboards.seller_order_kb(order), kind=kind, order_id=order["id"]
+        )
 
     async def _with_user(self, order: dict) -> dict:
         if "username" in order:
@@ -56,8 +83,14 @@ class OrderService:
         merged["first_name"] = user.get("first_name")
         return merged
 
-    async def notify_buyer(self, order: dict, text: str) -> None:
-        await self.send(order["user_id"], text, keyboards.buyer_order_kb(self.cfg, order))
+    async def notify_buyer(self, order: dict, text: str, kind: str) -> None:
+        await self.send(
+            order["user_id"],
+            text,
+            keyboards.buyer_order_kb(self.cfg, order),
+            kind=kind,
+            order_id=order["id"],
+        )
 
     # ------------------------------------------------------------- заказы
 
@@ -73,7 +106,7 @@ class OrderService:
             payment_mode=self.cfg.payment_mode,
             prefix=self.cfg.order_prefix,
         )
-        await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>")
+        await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>", const.NOTIFY_NEW_ORDER)
         return order, True
 
     async def _load(self, order_id: int) -> dict:
@@ -96,7 +129,9 @@ class OrderService:
             order_id, const.PAYMENT_CHECK, "user:%d" % actor_id, "покупатель заявил оплату"
         )
         assert updated
-        await self.push_order_to_sellers(updated, "💳 <b>Покупатель заявил оплату</b>")
+        await self.push_order_to_sellers(
+            updated, "💳 <b>Покупатель заявил оплату</b>", const.NOTIFY_PAYMENT
+        )
         return updated
 
     async def confirm_payment(self, order_id: int, actor: str, ref: str | None = None) -> dict:
@@ -111,6 +146,8 @@ class OrderService:
             updated["user_id"],
             "✅ <b>Оплата получена</b>\n\n" + texts.udid_request(),
             keyboards.buyer_order_kb(self.cfg, updated),
+            kind=const.NOTIFY_STATUS,
+            order_id=order_id,
         )
         return updated
 
@@ -126,6 +163,8 @@ class OrderService:
             "Проверьте сумму и комментарий к переводу или напишите в помощь."
             % texts.e(updated["code"]),
             keyboards.payment_kb(order_id, updated["payment_mode"]),
+            kind=const.NOTIFY_STATUS,
+            order_id=order_id,
         )
         return updated
 
@@ -144,7 +183,7 @@ class OrderService:
 
         updated = await db.set_udid(order_id, value, "user:%d" % actor_id)
         assert updated
-        await self.push_order_to_sellers(updated, "📱 <b>Получен UDID</b>")
+        await self.push_order_to_sellers(updated, "📱 <b>Получен UDID</b>", const.NOTIFY_UDID)
         return updated
 
     async def mark_installed(self, order_id: int, actor: str) -> dict:
@@ -157,6 +196,7 @@ class OrderService:
             updated,
             "📲 <b>Сертификат установлен</b>\n\n"
             "Осталось получить инструкцию — пришлём её сюда.",
+            const.NOTIFY_STATUS,
         )
         return updated
 
@@ -173,6 +213,7 @@ class OrderService:
         await self.notify_buyer(
             updated,
             "📄 <b>Инструкция по заказу %s</b>\n\n%s" % (texts.e(updated["code"]), texts.e(body)),
+            const.NOTIFY_STATUS,
         )
         return updated
 
@@ -192,9 +233,13 @@ class OrderService:
                 updated["user_id"],
                 "Заказ <b>%s</b> отменён продавцом. Новый можно оформить командой /start."
                 % texts.e(updated["code"]),
+                kind=const.NOTIFY_STATUS,
+                order_id=order_id,
             )
         else:
-            await self.push_order_to_sellers(updated, "🚫 <b>Покупатель отменил заказ</b>")
+            await self.push_order_to_sellers(
+                updated, "🚫 <b>Покупатель отменил заказ</b>", const.NOTIFY_STATUS
+            )
         return updated
 
     # ------------------------------------------------------------ переписка
@@ -224,11 +269,16 @@ class OrderService:
                 order["user_id"],
                 texts.chat_from_seller(order, body),
                 keyboards.buyer_order_kb(self.cfg, order),
+                kind=const.NOTIFY_CHAT,
+                order_id=order_id,
             )
         else:
             full = await self._with_user(order)
             await self.notify_sellers(
-                texts.chat_from_buyer(full, body), keyboards.seller_chat_kb(order["id"])
+                texts.chat_from_buyer(full, body),
+                keyboards.seller_chat_kb(order["id"]),
+                kind=const.NOTIFY_CHAT,
+                order_id=order_id,
             )
         return message
 
@@ -245,5 +295,5 @@ class OrderService:
     async def mark_paid_external(self, order_id: int, charge_id: str) -> dict:
         """Подтверждение из платёжной системы (Stars) — без участия продавца."""
         updated = await self.confirm_payment(order_id, "payment", ref=charge_id)
-        await self.push_order_to_sellers(updated, "💰 <b>Оплата прошла</b>")
+        await self.push_order_to_sellers(updated, "💰 <b>Оплата прошла</b>", const.NOTIFY_PAYMENT)
         return updated

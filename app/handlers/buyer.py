@@ -55,6 +55,91 @@ async def cmd_help(message: Message, cfg: Config) -> None:
     await message.answer(texts.help_text(cfg.support_username, cfg.webapp_enabled))
 
 
+async def _notify_screen(user_id: int, cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
+    """Экран настроек: общие переключатели плюс режим для текущего заказа."""
+    is_seller = cfg.is_seller(user_id)
+    items = const.notifications_for(is_seller)
+    prefs = await db.get_notify_prefs(user_id)
+
+    order = await db.get_active_order(user_id)
+    mode = const.ORDER_NOTIFY_DEFAULT
+    if order:
+        override = await db.get_order_notify(user_id, order["id"])
+        if override is True:
+            mode = const.ORDER_NOTIFY_ON
+        elif override is False:
+            mode = const.ORDER_NOTIFY_OFF
+
+    return (
+        texts.notify_screen(items, prefs, order, mode),
+        keyboards.notify_kb(items, prefs, order, mode),
+    )
+
+
+@router.message(Command("notify"))
+async def cmd_notify(message: Message, cfg: Config) -> None:
+    await _remember(message)
+    text, kb = await _notify_screen(message.from_user.id, cfg)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("nt:"))
+async def cb_notify_toggle(call: CallbackQuery, cfg: Config) -> None:
+    kind = call.data.split(":", 1)[1]
+    allowed = {key for key, _t, _h in const.notifications_for(cfg.is_seller(call.from_user.id))}
+    if kind not in allowed:
+        await call.answer()
+        return
+
+    prefs = await db.get_notify_prefs(call.from_user.id)
+    enabled = not prefs.get(kind, True)
+    await db.set_notify_pref(call.from_user.id, kind, enabled)
+
+    text, kb = await _notify_screen(call.from_user.id, cfg)
+    try:
+        await call.message.edit_text(text, reply_markup=kb)
+    except Exception:  # текст не изменился — Telegram отвечает ошибкой
+        pass
+    await call.answer(
+        "%s: %s" % (const.notification_title(kind), "включены" if enabled else "выключены")
+    )
+
+
+@router.callback_query(F.data.startswith("nto:"))
+async def cb_notify_order(call: CallbackQuery, cfg: Config) -> None:
+    try:
+        order_id = int(call.data.split(":", 1)[1])
+    except ValueError:
+        await call.answer()
+        return
+
+    order = await db.get_order(order_id)
+    if not order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+    if not cfg.is_seller(call.from_user.id) and order["user_id"] != call.from_user.id:
+        await call.answer("Это не ваш заказ", show_alert=True)
+        return
+
+    # По кругу: общие настройки → не беспокоить → всегда уведомлять.
+    current = await db.get_order_notify(call.from_user.id, order_id)
+    nxt = {None: False, False: True, True: None}[current]
+    await db.set_order_notify(call.from_user.id, order_id, nxt)
+
+    mode = const.ORDER_NOTIFY_DEFAULT
+    if nxt is True:
+        mode = const.ORDER_NOTIFY_ON
+    elif nxt is False:
+        mode = const.ORDER_NOTIFY_OFF
+
+    text, kb = await _notify_screen(call.from_user.id, cfg)
+    try:
+        await call.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await call.answer("Заказ %s: %s" % (order["code"], const.ORDER_NOTIFY_TITLES[mode]))
+
+
 @router.message(Command("forget"))
 async def cmd_forget(message: Message) -> None:
     removed = await db.purge_user(message.from_user.id)
@@ -97,6 +182,13 @@ async def nav_chat(call: CallbackQuery, cfg: Config) -> None:
         "<b>Связь с продавцом</b>\n\n" + texts.CHAT_HINT_BUYER,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
     )
+    await call.answer()
+
+
+@router.callback_query(F.data == "nav:notify")
+async def nav_notify(call: CallbackQuery, cfg: Config) -> None:
+    text, kb = await _notify_screen(call.from_user.id, cfg)
+    await call.message.answer(text, reply_markup=kb)
     await call.answer()
 
 
@@ -252,7 +344,9 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
     if not order or order["user_id"] != call.from_user.id:
         await call.answer("Это не ваш заказ", show_alert=True)
         return
-    await service.push_order_to_sellers(order, "🆘 <b>Покупатель просит помощь</b>")
+    await service.push_order_to_sellers(
+        order, "🆘 <b>Покупатель просит помощь</b>", const.NOTIFY_HELP
+    )
     contact = ("Напишите @%s — ответим." % texts.e(cfg.support_username)) if cfg.support_username else (
         "Продавец получил уведомление и ответит здесь."
     )

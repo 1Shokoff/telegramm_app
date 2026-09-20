@@ -304,6 +304,29 @@ async def cb_template(call: CallbackQuery, state: FSMContext, cfg: Config, servi
     await call.answer("Инструкция отправлена")
 
 
+@router.callback_query(F.data.startswith("o:bell:"))
+async def cb_bell(call: CallbackQuery) -> None:
+    """Тишина по конкретному заказу, не трогая общие настройки продавца."""
+    parsed = keyboards.parse_cb(call.data)
+    if not parsed:
+        return
+    order = await db.get_order(parsed[1])
+    if not order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+
+    current = await db.get_order_notify(call.from_user.id, order["id"])
+    nxt = {None: False, False: True, True: None}[current]
+    await db.set_order_notify(call.from_user.id, order["id"], nxt)
+
+    mode = const.ORDER_NOTIFY_DEFAULT
+    if nxt is True:
+        mode = const.ORDER_NOTIFY_ON
+    elif nxt is False:
+        mode = const.ORDER_NOTIFY_OFF
+    await call.answer("%s: %s" % (order["code"], const.ORDER_NOTIFY_TITLES[mode]), show_alert=True)
+
+
 @router.callback_query(F.data.startswith("o:chat:"))
 async def cb_chat(call: CallbackQuery, state: FSMContext) -> None:
     parsed = keyboards.parse_cb(call.data)
