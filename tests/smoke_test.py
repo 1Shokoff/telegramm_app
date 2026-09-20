@@ -179,6 +179,47 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     await svc.cancel(fresh["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
 
 
+async def test_chat(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nПереписка по заказу")
+    order, _ = await svc.get_or_create_order(BUYER)
+
+    bot.sent.clear()
+    message = await svc.post_message(order["id"], "Когда будет готово?", BUYER, from_seller=False)
+    check("сообщение покупателя сохранено", message["author"] == "buyer")
+    check("продавцу пришло уведомление", any("Когда будет готово?" in t for t in bot.to(SELLER)))
+    check("у продавца непрочитанное", await db.unread_count(order["id"], db.SELLER) == 1)
+
+    bot.sent.clear()
+    await svc.post_message(order["id"], "Завтра к вечеру", SELLER, from_seller=True)
+    check("покупателю пришёл ответ", any("Завтра к вечеру" in t for t in bot.to(BUYER)))
+    check("у покупателя непрочитанное", await db.unread_count(order["id"], db.BUYER) == 1)
+
+    messages = await svc.read_chat(order["id"], BUYER, as_seller=False)
+    check("история из двух сообщений", len(messages) == 2)
+    check("после чтения непрочитанных нет", await db.unread_count(order["id"], db.BUYER) == 0)
+    check("порядок от старых к новым", messages[0]["text"] == "Когда будет готово?")
+
+    try:
+        await svc.post_message(order["id"], "   ", BUYER, from_seller=False)
+        check("пустое сообщение отклонено", False)
+    except ServiceError:
+        check("пустое сообщение отклонено", True)
+
+    try:
+        await svc.post_message(order["id"], "x" * 3000, BUYER, from_seller=False)
+        check("слишком длинное отклонено", False)
+    except ServiceError:
+        check("слишком длинное отклонено", True)
+
+    try:
+        await svc.read_chat(order["id"], 424242, as_seller=False)
+        check("чужую переписку не прочитать", False)
+    except ServiceError:
+        check("чужую переписку не прочитать", True)
+
+    await svc.cancel(order["id"], "test", by_seller=True)
+
+
 async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nHTTP API Mini App")
     app = build_app(cfg, bot, svc)
@@ -259,6 +300,31 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         res = await client.get("/api/seller/orders?q=NP-0003", headers=seller_headers)
         check("поиск по коду", len((await res.json())["orders"]) == 1)
 
+        res = await client.post(
+            "/api/chat", headers=buyer_headers,
+            json={"orderId": order["id"], "text": "Здравствуйте!"},
+        )
+        check("покупатель отправил сообщение", res.status == 200)
+
+        res = await client.get("/api/chat?orderId=%d" % order["id"], headers=seller_headers)
+        data = await res.json()
+        check("продавец видит переписку", data["role"] == "seller" and len(data["messages"]) == 1)
+        check("чужое сообщение помечено верно", data["messages"][0]["mine"] is False)
+
+        res = await client.post(
+            "/api/chat", headers=seller_headers,
+            json={"orderId": order["id"], "text": "Добрый день, уже делаем"},
+        )
+        check("продавец ответил", (await res.json())["message"]["mine"] is True)
+
+        res = await client.get("/api/chat?orderId=%d" % order["id"], headers=buyer_headers)
+        check("покупатель видит оба сообщения", len((await res.json())["messages"]) == 2)
+
+        res = await client.post(
+            "/api/chat", headers=buyer_headers, json={"orderId": 999999, "text": "чужой заказ"}
+        )
+        check("несуществующий заказ — ошибка", res.status == 400)
+
         res = await client.get("/health")
         check("healthcheck отвечает", res.status == 200)
 
@@ -288,6 +354,7 @@ async def main() -> int:
     test_auth()
     await test_service(cfg, bot, svc)
     await test_api(cfg, bot, svc)
+    await test_chat(cfg, bot, svc)
 
     await db.close()
 

@@ -101,6 +101,20 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
     return data
 
 
+def message_public(message: dict, viewer: str) -> dict:
+    return {
+        "id": message["id"],
+        "author": message["author"],
+        "text": message["text"],
+        "createdAt": message["created_at"],
+        "mine": message["author"] == viewer,
+    }
+
+
+def viewer_role(request: web.Request, user: auth.WebAppUser) -> str:
+    return db.SELLER if cfg_of(request).is_seller(user.id) else db.BUYER
+
+
 # ------------------------------------------------------------------ маршруты
 
 
@@ -144,6 +158,12 @@ async def bootstrap(request: web.Request) -> web.Response:
             "privacy": texts.PRIVACY,
             "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,
             "order": order_public(order),
+            "unread": await db.unread_count(order["id"], db.BUYER) if order else 0,
+            "sellerUnread": (
+                sum((await db.unread_by_order(db.SELLER)).values())
+                if cfg.is_seller(user.id)
+                else 0
+            ),
         }
     )
 
@@ -212,6 +232,32 @@ async def submit_udid(request: web.Request) -> web.Response:
     return web.json_response({"order": order_public(order)})
 
 
+@routes.get("/api/chat")
+async def get_chat(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    role = viewer_role(request, user)
+    try:
+        order_id = int(request.query.get("orderId", 0))
+    except ValueError:
+        raise ApiError("Некорректный orderId")
+
+    messages = await service_of(request).read_chat(order_id, user.id, role == db.SELLER)
+    return web.json_response(
+        {"role": role, "messages": [message_public(m, role) for m in messages]}
+    )
+
+
+@routes.post("/api/chat")
+async def post_chat(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    role = viewer_role(request, user)
+    data = await body(request)
+    message = await service_of(request).post_message(
+        int(data.get("orderId", 0)), str(data.get("text", "")), user.id, role == db.SELLER
+    )
+    return web.json_response({"message": message_public(message, role)})
+
+
 @routes.post("/api/order/cancel")
 async def cancel(request: web.Request) -> web.Response:
     user = await current_user(request)
@@ -255,11 +301,21 @@ async def seller_orders(request: web.Request) -> web.Response:
         status = "all"
     orders = await db.list_orders(status=None if status == "all" else status, query=query, limit=100)
     counts = await db.status_counts()
+    unread = await db.unread_by_order(db.SELLER)
+
+    payload = []
+    for order in orders:
+        item = order_public(order, full=True)
+        assert item is not None
+        item["unread"] = unread.get(order["id"], 0)
+        payload.append(item)
+
     return web.json_response(
         {
-            "orders": [order_public(o, full=True) for o in orders],
+            "orders": payload,
             "counts": counts,
             "titles": const.TITLES,
+            "unreadTotal": sum(unread.values()),
         }
     )
 

@@ -55,6 +55,19 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_order ON events(order_id, id);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    author      TEXT    NOT NULL,
+    author_id   INTEGER NOT NULL,
+    text        TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL,
+    seen_buyer  INTEGER NOT NULL DEFAULT 0,
+    seen_seller INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_order ON messages(order_id, id);
 """
 
 
@@ -307,3 +320,73 @@ async def list_events(order_id: int, limit: int = 50) -> list[dict]:
     return await _fetchall(
         "SELECT * FROM events WHERE order_id = ? ORDER BY id DESC LIMIT ?", (order_id, limit)
     )
+
+
+# ------------------------------------------------------------- переписка
+
+BUYER = "buyer"
+SELLER = "seller"
+
+
+def _seen_column(viewer: str) -> str:
+    return "seen_buyer" if viewer == BUYER else "seen_seller"
+
+
+async def add_message(order_id: int, author: str, author_id: int, text: str) -> dict:
+    """Своё сообщение автор видел сразу, второй стороне оно придёт непрочитанным."""
+    ts = now()
+    cur = await conn().execute(
+        """
+        INSERT INTO messages (order_id, author, author_id, text, created_at, seen_buyer, seen_seller)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            order_id,
+            author,
+            author_id,
+            text,
+            ts,
+            1 if author == BUYER else 0,
+            1 if author == SELLER else 0,
+        ),
+    )
+    await conn().execute(
+        "UPDATE orders SET updated_at = ? WHERE id = ?", (ts, order_id)
+    )
+    await conn().commit()
+    row = await _fetchone("SELECT * FROM messages WHERE id = ?", (int(cur.lastrowid),))
+    assert row is not None
+    return row
+
+
+async def list_messages(order_id: int, limit: int = 200) -> list[dict]:
+    rows = await _fetchall(
+        "SELECT * FROM messages WHERE order_id = ? ORDER BY id DESC LIMIT ?", (order_id, limit)
+    )
+    return list(reversed(rows))
+
+
+async def mark_seen(order_id: int, viewer: str) -> None:
+    column = _seen_column(viewer)
+    await conn().execute(
+        "UPDATE messages SET %s = 1 WHERE order_id = ? AND %s = 0" % (column, column),
+        (order_id,),
+    )
+    await conn().commit()
+
+
+async def unread_count(order_id: int, viewer: str) -> int:
+    row = await _fetchone(
+        "SELECT COUNT(*) AS n FROM messages WHERE order_id = ? AND %s = 0" % _seen_column(viewer),
+        (order_id,),
+    )
+    return int(row["n"]) if row else 0
+
+
+async def unread_by_order(viewer: str) -> dict[int, int]:
+    """Сколько непрочитанных в каждом заказе — для счётчиков в списке продавца."""
+    rows = await _fetchall(
+        "SELECT order_id, COUNT(*) AS n FROM messages WHERE %s = 0 GROUP BY order_id"
+        % _seen_column(viewer)
+    )
+    return {int(r["order_id"]): int(r["n"]) for r in rows}

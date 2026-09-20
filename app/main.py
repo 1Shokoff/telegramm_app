@@ -41,6 +41,8 @@ BUYER_COMMANDS = [
 SELLER_COMMANDS = BUYER_COMMANDS + [
     BotCommand(command="orders", description="Открытые заказы"),
     BotCommand(command="find", description="Найти заказ"),
+    BotCommand(command="chat", description="Переписка по заказу"),
+    BotCommand(command="reply", description="Ответить покупателю"),
     BotCommand(command="stats", description="Статистика"),
     BotCommand(command="sellerhelp", description="Команды продавца"),
 ]

@@ -4,7 +4,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from .. import catalog, const, db, keyboards, texts, udid as udid_mod
 from ..config import Config
@@ -84,6 +84,19 @@ async def nav_help(call: CallbackQuery, cfg: Config) -> None:
 @router.callback_query(F.data == "nav:udid_help")
 async def nav_udid_help(call: CallbackQuery) -> None:
     await call.message.answer(texts.udid_request())
+    await call.answer()
+
+
+@router.callback_query(F.data == "nav:chat")
+async def nav_chat(call: CallbackQuery, cfg: Config) -> None:
+    rows = []
+    wa = keyboards.webapp_button(cfg, "Открыть переписку")
+    if wa:
+        rows.append([wa])
+    await call.message.answer(
+        "<b>Связь с продавцом</b>\n\n" + texts.CHAT_HINT_BUYER,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+    )
     await call.answer()
 
 
@@ -254,11 +267,12 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
 async def free_text(message: Message, cfg: Config, service: OrderService) -> None:
     await _remember(message)
     order = await db.get_active_order(message.from_user.id)
-    value = udid_mod.normalize(message.text)
+    text = message.text or ""
 
-    if order and order["status"] == const.PAID:
+    # На шаге ввода номер отличаем от вопроса продавцу по виду сообщения.
+    if order and order["status"] == const.PAID and udid_mod.looks_like_attempt(text):
         try:
-            updated = await service.submit_udid(order["id"], message.text, message.from_user.id)
+            updated = await service.submit_udid(order["id"], text, message.from_user.id)
         except ServiceError as exc:
             await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.udid_request()))
             return
@@ -267,14 +281,19 @@ async def free_text(message: Message, cfg: Config, service: OrderService) -> Non
         )
         return
 
-    if order and len(value) >= 24:
-        await message.answer(
-            "Похоже на идентификатор устройства, но сейчас он не нужен: статус заказа — «%s»."
-            % texts.e(const.TITLES.get(order["status"], order["status"]))
-        )
+    if order:
+        try:
+            await service.post_message(order["id"], text, message.from_user.id, from_seller=False)
+        except ServiceError as exc:
+            await message.answer(texts.e(str(exc)))
+            return
+        reply = "Отправлено продавцу по заказу <b>%s</b>. Ответ придёт сюда." % texts.e(order["code"])
+        if order["status"] == const.PAID:
+            reply += "\n\nЕсли это был UDID — проверьте номер: нужно 40 символов."
+        await message.answer(reply, reply_markup=keyboards.buyer_order_kb(cfg, order))
         return
 
     await message.answer(
-        "Не понял сообщение. /order — статус заказа, /help — помощь.",
-        reply_markup=keyboards.start_kb(cfg, bool(order and order["status"] in const.OPEN_STATUSES)),
+        "Не понял сообщение. /start — витрина, /help — помощь.",
+        reply_markup=keyboards.start_kb(cfg, False),
     )

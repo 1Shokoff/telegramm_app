@@ -77,7 +77,12 @@ def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
     wa = webapp_button(cfg, "Открыть приложение")
     if wa:
         rows.append([wa])
-    rows.append([InlineKeyboardButton(text="Помощь по заказу", callback_data=cb("help", order["id"]))])
+    rows.append(
+        [
+            InlineKeyboardButton(text="💬 Написать продавцу", callback_data="nav:chat"),
+            InlineKeyboardButton(text="Помощь", callback_data=cb("help", order["id"])),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -101,11 +106,25 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
     elif status == const.INSTALLED:
         rows.append([InlineKeyboardButton(text="📄 Отправить инструкцию", callback_data=cb("instr", oid))])
 
-    tail = [InlineKeyboardButton(text="🔄 Обновить", callback_data=cb("card", oid))]
+    rows.append(
+        [
+            InlineKeyboardButton(text="💬 Написать", callback_data=cb("chat", oid)),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=cb("card", oid)),
+        ]
+    )
     if status in const.OPEN_STATUSES:
-        tail.append(InlineKeyboardButton(text="🚫 Отменить", callback_data=cb("scancel", oid)))
-    rows.append(tail)
+        rows.append([InlineKeyboardButton(text="🚫 Отменить заказ", callback_data=cb("scancel", oid))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def seller_chat_kb(order_id: int) -> InlineKeyboardMarkup:
+    """Под сообщением покупателя: ответить, не открывая карточку."""
+    return _rows(
+        [
+            InlineKeyboardButton(text="💬 Ответить", callback_data=cb("chat", order_id)),
+            InlineKeyboardButton(text="Карточка", callback_data=cb("card", order_id)),
+        ]
+    )
 
 
 def instruction_prompt_kb(order_id: int, has_template: bool) -> InlineKeyboardMarkup:

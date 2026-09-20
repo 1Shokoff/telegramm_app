@@ -38,6 +38,19 @@ def validate(raw: str) -> tuple[str | None, str | None]:
     return None, "В UDID допустимы только цифры и латинские буквы от a до f."
 
 
+def looks_like_attempt(raw: str) -> bool:
+    """Похоже ли сообщение на попытку прислать номер, а не на вопрос продавцу.
+
+    Нужно, чтобы на шаге ввода UDID обычный текст уходил в переписку,
+    а не получал в ответ «в номере 12 символов».
+    """
+    value = normalize(raw)
+    if len(value) < 20:
+        return False
+    body = value.replace("-", "")
+    return all(ch in "0123456789abcdef" for ch in body)
+
+
 def mask(udid: str | None) -> str:
     """Короткий вид для покупателя: 40 символов целиком показывать незачем."""
     if not udid:

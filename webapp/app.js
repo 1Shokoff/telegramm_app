@@ -15,6 +15,7 @@ const state = {
   agreeUdid: false,
   busy: false,
   seller: { status: 'open', q: '', orders: [], counts: {}, current: null, instruction: '' },
+  chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
 };
 
 const STEP_LABELS = [
@@ -225,6 +226,7 @@ function viewWaitingPayment(order) {
     '<h1>Проверяем платёж</h1>' +
     '<p class="muted">Заказ ' + esc(order.code) + '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
     '<div class="card"><button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button></div>' +
+    chatButton('Чат с продавцом') +
     '<button class="btn btn-ghost btn-sm" data-action="order-help">Помощь по заказу</button>'
   );
 }
@@ -269,6 +271,90 @@ function viewUdid(order) {
   );
 }
 
+function timeOf(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+function chatMessagesHtml() {
+  const list = state.chat.messages;
+  if (!list.length) {
+    return '<div class="chat-empty">Сообщений пока нет. Напишите первым — ответ придёт сюда и в чат бота.</div>';
+  }
+  return list.map((m) => (
+    '<div class="msg' + (m.mine ? ' mine' : '') + '">' +
+      '<div class="msg-text">' + esc(m.text) + '</div>' +
+      '<div class="msg-time">' + esc(timeOf(m.createdAt)) + '</div>' +
+    '</div>'
+  )).join('');
+}
+
+function viewChat() {
+  return (
+    '<button class="backlink" data-action="chat-back">← Назад</button>' +
+    '<div class="section-head"><h2>' + esc(state.chat.title || 'Переписка') + '</h2></div>' +
+    '<div class="chat-list" id="chatList">' + chatMessagesHtml() + '</div>' +
+    '<div class="composer">' +
+      '<textarea id="chatInput" rows="1" placeholder="Сообщение продавцу…"></textarea>' +
+      '<button class="send-btn" data-action="chat-send" aria-label="Отправить">↑</button>' +
+    '</div>'
+  );
+}
+
+function paintChat(scroll) {
+  const list = document.getElementById('chatList');
+  if (!list) return;
+  list.innerHTML = chatMessagesHtml();
+  if (scroll !== false) window.scrollTo(0, document.body.scrollHeight);
+}
+
+async function loadChat(scroll) {
+  const data = await api('/api/chat?orderId=' + state.chat.orderId);
+  const changed = data.messages.length !== state.chat.messages.length;
+  state.chat.messages = data.messages;
+  if (state.boot) state.boot.unread = 0;
+  if (changed || scroll === true) paintChat(scroll !== false);
+}
+
+function stopChatPolling() {
+  if (state.chat.timer) {
+    clearInterval(state.chat.timer);
+    state.chat.timer = null;
+  }
+}
+
+function startChatPolling() {
+  stopChatPolling();
+  // Новые сообщения второй стороны подтягиваем сами: вебсокета тут нет.
+  state.chat.timer = setInterval(() => {
+    if (state.view !== 'chat') {
+      stopChatPolling();
+      return;
+    }
+    loadChat(false).catch(() => {});
+  }, 5000);
+}
+
+function openChat(orderId, title, from) {
+  state.chat.orderId = orderId;
+  state.chat.title = title;
+  state.chat.from = from || 'order';
+  state.chat.messages = [];
+  state.view = 'chat';
+  render();
+  guard(async () => {
+    await loadChat(true);
+    startChatPolling();
+  });
+}
+
+function chatButton(label) {
+  const unread = state.boot && state.boot.unread ? state.boot.unread : 0;
+  const badge = unread ? ' <span class="count-badge">' + unread + '</span>' : '';
+  return '<button class="btn btn-secondary" data-action="chat">' + esc(label) + badge + '</button>';
+}
+
 function viewOrderStatus(order) {
   const b = state.boot;
   const step = order.step;
@@ -299,6 +385,7 @@ function viewOrderStatus(order) {
         : '') +
       '<button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button>' +
     '</div>' +
+    chatButton('Чат с продавцом') +
     '<button class="btn btn-ghost" data-action="order-help">Помощь по заказу</button>'
   );
 }
@@ -315,7 +402,7 @@ function viewOrder() {
 function viewHelp() {
   const b = state.boot;
   const support = b.support
-    ? '<button class="btn btn-secondary" data-action="support">Написать @' + esc(b.support) + '</button>'
+    ? '<button class="btn btn-secondary" data-action="chat">Написать @' + esc(b.support) + '</button>'
     : '<button class="btn btn-secondary" data-action="support">Написать продавцу</button>';
 
   return (
@@ -345,6 +432,7 @@ function sellerLine(o) {
       '<span class="grow"><span class="code">' + esc(o.code) + '</span><br>' +
       '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.priceText) +
       (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
+      (o.unread ? '<span class="count-badge">' + o.unread + '</span>' : '') +
       '<span class="meta">›</span>' +
     '</button>'
   );
@@ -384,7 +472,9 @@ function viewSellerOrder(o) {
         '<textarea id="instrText" placeholder="Что сделать покупателю после установки…">' + esc(state.seller.instruction) + '</textarea></label>' +
         '<button class="btn btn-primary mt" data-action="seller-send-instr">Отправить покупателю</button></div>'
       : '') +
-    (o.isOpen ? '<button class="btn btn-danger btn-sm" data-action="seller-act:cancel">Отменить заказ</button>' : '')
+    '<button class="btn btn-secondary" data-action="seller-chat">💬 Переписка' +
+      (o.unread ? ' <span class="count-badge">' + o.unread + '</span>' : '') + '</button>' +
+    (o.isOpen ? '<button class="btn btn-danger btn-sm mt" data-action="seller-act:cancel">Отменить заказ</button>' : '')
   );
 }
 
@@ -414,7 +504,9 @@ function viewSeller() {
 function tabbar() {
   const b = state.boot;
   const order = b.order;
-  const alert = order && order.isOpen && (order.status === 'paid' || order.status === 'new');
+  const unread = b.unread || 0;
+  const alert = unread > 0 || (order && order.isOpen && (order.status === 'paid' || order.status === 'new'));
+  const sellerAlert = (b.sellerUnread || 0) > 0;
   const tabs = [
     ['home', 'Главная', '⌂'],
     ['apps', 'Приложения', '▦'],
@@ -426,7 +518,8 @@ function tabbar() {
   return tabs.map(([key, label, icon]) => (
     '<button class="' + (state.view === key ? 'on' : '') + '" data-action="tab:' + key + '">' +
     '<span>' + icon + '</span>' +
-    (key === 'order' && alert ? '<span class="dot-badge"></span>' : '') +
+    ((key === 'order' && alert) || (key === 'seller' && sellerAlert)
+      ? '<span class="dot-badge"></span>' : '') +
     '<span>' + esc(label) + '</span></button>'
   )).join('');
 }
@@ -441,7 +534,11 @@ function render() {
   }
   if (!state.boot) return;
 
-  const views = { home: viewHome, apps: viewApps, order: viewOrder, help: viewHelp, seller: viewSeller };
+  const views = {
+    home: viewHome, apps: viewApps, order: viewOrder,
+    help: viewHelp, seller: viewSeller, chat: viewChat,
+  };
+  document.body.classList.toggle('chat-mode', state.view === 'chat');
   root.innerHTML = (views[state.view] || viewHome)();
   document.getElementById('tabbar').innerHTML = tabbar();
 
@@ -455,12 +552,12 @@ function render() {
 
   bindInputs();
   updateBackButton();
-  window.scrollTo(0, 0);
+  if (state.view !== 'chat') window.scrollTo(0, 0);
 }
 
 function updateBackButton() {
   if (!tg || !tg.BackButton) return;
-  const nested = state.view === 'seller' && state.seller.current;
+  const nested = state.view === 'chat' || (state.view === 'seller' && state.seller.current);
   if (nested || (state.view !== 'home' && state.view !== 'order')) tg.BackButton.show();
   else tg.BackButton.hide();
 }
@@ -509,6 +606,17 @@ function bindInputs() {
       clearTimeout(timer);
       timer = setTimeout(() => loadSellerOrders().then(render), 350);
     });
+  }
+
+  const chatInput = document.getElementById('chatInput');
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        handleAction('chat-send');
+      }
+    });
+    chatInput.focus();
   }
 
   const instr = document.getElementById('instrText');
@@ -645,6 +753,41 @@ const actions = {
   'order-help': () => guard(async () => {
     await api('/api/order/help', { method: 'POST', body: { orderId: state.boot.order.id } });
     toast('Продавец получил запрос');
+  }),
+
+  'chat': () => {
+    const order = state.boot.order;
+    if (!order) { actions.support(); return; }
+    openChat(order.id, 'Заказ ' + order.code, 'order');
+  },
+
+  'seller-chat': () => {
+    const current = state.seller.current;
+    if (current) openChat(current.id, 'Заказ ' + current.code, 'seller');
+  },
+
+  'chat-back': () => {
+    stopChatPolling();
+    state.view = state.chat.from === 'seller' ? 'seller' : 'order';
+    guard(async () => {
+      if (state.view === 'seller') await loadSellerOrders();
+      else await refreshOrder();
+      render();
+    });
+  },
+
+  'chat-send': () => guard(async () => {
+    const input = document.getElementById('chatInput');
+    const text = (input && input.value || '').trim();
+    if (!text) return;
+    const data = await api('/api/chat', {
+      method: 'POST',
+      body: { orderId: state.chat.orderId, text },
+    });
+    input.value = '';
+    state.chat.messages.push(data.message);
+    paintChat(true);
+    haptic('success');
   }),
 
   'seller-back': () => { state.seller.current = null; render(); },

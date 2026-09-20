@@ -214,7 +214,15 @@ p { margin: 0 0 12px; }
 .row:last-child { border-bottom: 0; }
 .row .label { color: var(--muted); }
 .row .value { font-weight: 600; text-align: right; }
-.row .value.mono { font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+/* UDID длиннее строки — переносим его, а не обрезаем. */
+.row .value.mono {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  word-break: break-all;
+  min-width: 0;
+}
 
 .product { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .product .app-icon { width: 46px; height: 46px; border-radius: 13px; font-size: 20px; }
@@ -476,3 +484,74 @@ textarea {
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { border-color: var(--danger); color: var(--danger); }
+
+/* ------------------------------------------------------------- переписка */
+
+.chat-list { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 8px; }
+
+.chat-empty {
+  color: var(--muted); font-size: 14px; text-align: center;
+  padding: 32px 16px;
+}
+
+.msg {
+  max-width: 82%;
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 16px 4px;
+  padding: 10px 14px;
+}
+.msg.mine {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+  border-radius: 16px 16px 4px 16px;
+}
+.msg-text { font-size: 15px; white-space: pre-wrap; word-break: break-word; }
+.msg-time { font-size: 11px; opacity: .55; margin-top: 4px; text-align: right; }
+
+.composer {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex; gap: 10px; align-items: flex-end;
+  padding: 10px var(--pad) calc(10px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(18px);
+  border-top: 1px solid var(--line);
+  max-width: 560px;
+  margin: 0 auto;
+  z-index: 40;
+}
+.composer textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 140px;
+  padding: 11px 14px;
+  border-radius: 22px;
+  resize: none;
+}
+.send-btn {
+  width: 44px; height: 44px;
+  flex: 0 0 44px;
+  border: 0; border-radius: 50%;
+  background: var(--accent); color: var(--accent-text);
+  font-size: 20px; font-weight: 700;
+  cursor: pointer;
+}
+.send-btn:active { opacity: .75; }
+
+body.chat-mode .tabbar { display: none; }
+body.chat-mode .view { padding-bottom: 110px; }
+
+.count-badge {
+  display: inline-grid; place-items: center;
+  min-width: 20px; height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px; font-weight: 700;
+  flex: 0 0 auto;
+}

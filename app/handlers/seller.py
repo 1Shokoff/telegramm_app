@@ -19,6 +19,7 @@ router = Router(name="seller")
 class SellerFlow(StatesGroup):
     instruction = State()
     note = State()
+    reply = State()
 
 
 def setup(cfg: Config) -> Router:
@@ -133,12 +134,46 @@ async def cmd_log(message: Message, command: CommandObject) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("chat"))
+async def cmd_chat(message: Message, command: CommandObject) -> None:
+    code = (command.args or "").strip()
+    order = await db.get_order_by_code(code) if code else None
+    if not order:
+        await message.answer("Использование: /chat NP-0001")
+        return
+    messages = await db.list_messages(order["id"], limit=20)
+    await db.mark_seen(order["id"], db.SELLER)
+    await message.answer(
+        texts.chat_history(order, messages), reply_markup=keyboards.seller_chat_kb(order["id"])
+    )
+
+
+@router.message(Command("reply"))
+async def cmd_reply(message: Message, command: CommandObject, service: OrderService) -> None:
+    parts = (command.args or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Использование: /reply NP-0001 текст сообщения")
+        return
+    order = await db.get_order_by_code(parts[0])
+    if not order:
+        await message.answer("Заказ не найден.")
+        return
+    try:
+        await service.post_message(order["id"], parts[1], message.from_user.id, from_seller=True)
+    except ServiceError as exc:
+        await message.answer(texts.e(str(exc)))
+        return
+    await message.answer("Отправлено покупателю по заказу %s." % texts.e(order["code"]))
+
+
 @router.message(Command("sellerhelp"))
 async def cmd_sellerhelp(message: Message) -> None:
     await message.answer(
         "<b>Команды продавца</b>\n\n"
         "/orders — открытые заказы (/orders all — все)\n"
         "/find NP-0001 — найти по коду, UDID или юзернейму\n"
+        "/chat NP-0001 — переписка по заказу\n"
+        "/reply NP-0001 текст — ответить покупателю\n"
         "/log NP-0001 — история заказа\n"
         "/note NP-0001 текст — заметка к заказу\n"
         "/stats — счётчики по статусам\n\n"
@@ -267,6 +302,49 @@ async def cb_template(call: CallbackQuery, state: FSMContext, cfg: Config, servi
     text, kb = await _card(order)
     await call.message.answer(text, reply_markup=kb)
     await call.answer("Инструкция отправлена")
+
+
+@router.callback_query(F.data.startswith("o:chat:"))
+async def cb_chat(call: CallbackQuery, state: FSMContext) -> None:
+    parsed = keyboards.parse_cb(call.data)
+    if not parsed:
+        return
+    order = await db.get_order(parsed[1])
+    if not order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+
+    messages = await db.list_messages(order["id"], limit=10)
+    await db.mark_seen(order["id"], db.SELLER)
+    await state.set_state(SellerFlow.reply)
+    await state.update_data(order_id=order["id"])
+    await call.message.answer(
+        texts.chat_history(order, messages)
+        + "\n\nПришлите ответ одним сообщением — он уйдёт покупателю.",
+        reply_markup=keyboards.instruction_prompt_kb(order["id"], has_template=False),
+    )
+    await call.answer()
+
+
+@router.message(StateFilter(SellerFlow.reply), F.text)
+async def take_reply(message: Message, state: FSMContext, service: OrderService) -> None:
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    if not order_id:
+        await state.clear()
+        await message.answer("Не понял, к какому заказу это относится. Откройте карточку заново.")
+        return
+    try:
+        await service.post_message(order_id, message.text, message.from_user.id, from_seller=True)
+    except ServiceError as exc:
+        await message.answer(texts.e(str(exc)))
+        return
+    await state.clear()
+    order = await db.get_order(order_id)
+    await message.answer(
+        "Отправлено покупателю по заказу %s." % texts.e(order["code"] if order else ""),
+        reply_markup=keyboards.seller_chat_kb(order_id),
+    )
 
 
 @router.message(StateFilter(SellerFlow.instruction), F.text)

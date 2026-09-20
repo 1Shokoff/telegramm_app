@@ -197,6 +197,49 @@ class OrderService:
             await self.push_order_to_sellers(updated, "🚫 <b>Покупатель отменил заказ</b>")
         return updated
 
+    # ------------------------------------------------------------ переписка
+
+    MESSAGE_LIMIT = 2000
+
+    async def post_message(
+        self, order_id: int, text: str, author_id: int, from_seller: bool
+    ) -> dict:
+        """Сообщение по заказу: сохраняем и дублируем второй стороне в чат бота."""
+        order = await self._load(order_id)
+        if not from_seller and order["user_id"] != author_id:
+            raise ServiceError("Это не ваш заказ.")
+
+        body = (text or "").strip()
+        if not body:
+            raise ServiceError("Сообщение пустое.")
+        if len(body) > self.MESSAGE_LIMIT:
+            raise ServiceError("Слишком длинное сообщение — не больше %d символов." % self.MESSAGE_LIMIT)
+
+        author = db.SELLER if from_seller else db.BUYER
+        message = await db.add_message(order_id, author, author_id, body)
+        await db.add_event(order_id, "%s:%d" % (author, author_id), "message", None)
+
+        if from_seller:
+            await self.send(
+                order["user_id"],
+                texts.chat_from_seller(order, body),
+                keyboards.buyer_order_kb(self.cfg, order),
+            )
+        else:
+            full = await self._with_user(order)
+            await self.notify_sellers(
+                texts.chat_from_buyer(full, body), keyboards.seller_chat_kb(order["id"])
+            )
+        return message
+
+    async def read_chat(self, order_id: int, viewer_id: int, as_seller: bool) -> list[dict]:
+        order = await self._load(order_id)
+        if not as_seller and order["user_id"] != viewer_id:
+            raise ServiceError("Это не ваш заказ.")
+        messages = await db.list_messages(order_id)
+        await db.mark_seen(order_id, db.SELLER if as_seller else db.BUYER)
+        return messages
+
     # ------------------------------------------------------------- прочее
 
     async def mark_paid_external(self, order_id: int, charge_id: str) -> dict:

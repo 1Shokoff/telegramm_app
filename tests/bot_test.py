@@ -161,8 +161,8 @@ async def main() -> int:
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "12345"))
     order = await db.get_order(order["id"])
-    check("мусор не принимается", order["device_udid"] is None)
-    check("подсказка про 40 символов", any("40" in t for t in bot.texts_to(BUYER)))
+    check("короткий текст не принят за номер", order["device_udid"] is None)
+    check("есть напоминание про 40 символов", any("40" in t for t in bot.texts_to(BUYER)))
 
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "2b6f0cc904d137be2e17 30235f5664094b831186"))
@@ -182,6 +182,24 @@ async def main() -> int:
     order = await db.get_order(order["id"])
     check("инструкция отправлена", order["status"] == const.DONE)
     check("покупатель получил текст", any("Настройки" in t for t in bot.texts_to(BUYER)))
+
+    print("\nПереписка")
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "А когда примерно будет готово?"))
+    check("вопрос ушёл продавцу", any("когда примерно" in t for t in bot.texts_to(SELLER)))
+    check("покупателю подтверждение", any("Отправлено продавцу" in t for t in bot.texts_to(BUYER)))
+
+    bot.reset()
+    await dp.feed_update(bot, callback_update(SELLER, "o:chat:%d" % order["id"]))
+    await dp.feed_update(bot, message_update(SELLER, "Сегодня вечером будет готово"))
+    check("ответ продавца дошёл", any("Сегодня вечером" in t for t in bot.texts_to(BUYER)))
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/chat %s" % order["code"]))
+    check("/chat показывает переписку",
+          any("когда примерно" in t for t in bot.texts_to(SELLER)))
+    await dp.feed_update(bot, message_update(SELLER, "/reply %s Ответ командой" % order["code"]))
+    check("/reply доставлен", any("Ответ командой" in t for t in bot.texts_to(BUYER)))
 
     print("\nКоманды продавца")
     bot.reset()

@@ -158,6 +158,37 @@ def help_text(support_username: str, has_webapp: bool) -> str:
     return "\n".join(lines)
 
 
+def chat_from_buyer(order: dict, body: str) -> str:
+    return "💬 <b>Сообщение по заказу %s</b>\nОт: %s\n\n%s" % (
+        e(order["code"]),
+        user_line(order),
+        e(body),
+    )
+
+
+def chat_from_seller(order: dict, body: str) -> str:
+    return "💬 <b>Продавец по заказу %s</b>\n\n%s" % (e(order["code"]), e(body))
+
+
+def chat_history(order: dict, messages: list[dict]) -> str:
+    if not messages:
+        return "По заказу <b>%s</b> переписки ещё нет." % e(order["code"])
+    lines = ["<b>Переписка по заказу %s</b>" % e(order["code"]), ""]
+    for msg in messages:
+        who = "Продавец" if msg["author"] == "seller" else "Покупатель"
+        lines.append(
+            "<b>%s</b> · %s\n%s"
+            % (who, e(msg["created_at"].replace("T", " ")[5:16]), e(msg["text"]))
+        )
+    return "\n\n".join(lines)
+
+
+CHAT_HINT_BUYER = (
+    "Просто напишите сообщение в этот чат — продавец увидит его в карточке заказа "
+    "и ответит здесь же."
+)
+
+
 PRIVACY = (
     "UDID нужен только для выпуска сертификата под ваше устройство. "
     "Он виден продавцу и хранится до закрытия заказа. "
