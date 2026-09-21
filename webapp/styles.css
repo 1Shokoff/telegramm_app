@@ -658,3 +658,25 @@ body { background-image: radial-gradient(ellipse at 85% 0%, #c8ff310c, transpare
    уже ~390px шесть плиток по 43px не помещались и последняя уезжала вниз. */
 .cluster { flex-wrap: nowrap; }
 .cluster .app-icon { flex: 1 1 0; min-width: 0; max-width: 48px; height: auto; aspect-ratio: 1 / 1; }
+
+/* Кнопки подряд — с воздухом между ними (раньше слипались, например в «Помощи»). */
+.btn + .btn { margin-top: 10px; }
+.btn-row > .btn + .btn { margin-top: 0; }
+
+/* Карточка приложения — кнопка: сбрасываем системный вид. */
+button.app-card {
+  font: inherit; color: inherit; text-align: left; width: 100%;
+  cursor: pointer; -webkit-appearance: none; appearance: none;
+  transition: transform .15s ease, border-color .15s ease;
+}
+button.app-card:active { transform: scale(.97); border-color: var(--accent); }
+.app-card .name, .app-card .cat { display: block; }
+
+/* Логотип в шапке — кнопка «на главную». */
+button.brand {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left;
+  cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+button.brand .brand-text, button.brand .brand-title, button.brand .brand-sub { display: block; }
+button.brand:active { opacity: .75; }

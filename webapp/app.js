@@ -9,6 +9,8 @@ const state = {
   showAllApps: false,
   filter: 'Все',
   newOrder: false,
+  checkoutApp: null,
+  screen: '',
   udid: '',
   udidChecked: null,
   udidError: null,
@@ -80,10 +82,11 @@ function iconHtml(app, extraClass) {
   const img = app.icon
     ? '<img src="/static/icons/' + esc(app.icon) + '" alt="" loading="lazy" onerror="this.remove()">'
     : '';
+  // span, а не div: иконка живёт и внутри кнопки-карточки.
   return (
-    '<div class="' + cls + '" style="background:' + esc(app.color) + '">' +
+    '<span class="' + cls + '" style="background:' + esc(app.color) + '">' +
     '<span>' + esc(app.letter) + '</span>' + img +
-    '</div>'
+    '</span>'
   );
 }
 
@@ -106,12 +109,13 @@ function flowline(step) {
 
 function appCard(app) {
   return (
-    '<div class="app-card">' +
+    '<button type="button" class="app-card" data-action="pick-app:' + esc(app.slug) + '" ' +
+      'aria-label="' + esc(app.name) + ' — оформить">' +
     '<span class="arrow">↗</span>' +
     iconHtml(app) +
-    '<div class="name">' + esc(app.name) + '</div>' +
-    '<div class="cat">' + esc(app.category) + '</div>' +
-    '</div>'
+    '<span class="name">' + esc(app.name) + '</span>' +
+    '<span class="cat">' + esc(app.category) + '</span>' +
+    '</button>'
   );
 }
 
@@ -129,7 +133,7 @@ function viewHome() {
       '<h1>Твои приложения.<br><em>Снова на iPhone.</em></h1>' +
       '<p>Весь каталог за ' + esc(b.product.priceText) + '. Без лимита установок и доплат за приложения.</p>' +
       '<div class="cluster">' + featured.map((a) => iconHtml(a)).join('') + '</div>' +
-      '<button class="btn btn-primary" data-action="tab:order">Весь каталог · ' + esc(b.product.priceText) + ' →</button>' +
+      '<button class="btn btn-primary" data-action="buy-catalog">Весь каталог · ' + esc(b.product.priceText) + ' →</button>' +
       '<div class="cta-note">Один платёж · все приложения каталога</div>' +
     '</section>' +
     flowline(0) +
@@ -155,7 +159,7 @@ function viewApps() {
     )).join('') + '</div>' +
     '<div class="grid">' + list.map(appCard).join('') + '</div>' +
     '<div class="cta-note mt">Состав услуги и совместимость подтвердим до открытия продаж.</div>' +
-    '<div class="mt"><button class="btn btn-primary" data-action="tab:order">Оформить · ' + esc(b.product.priceText) + '</button></div>'
+    '<div class="mt"><button class="btn btn-primary" data-action="buy-catalog">Весь каталог · ' + esc(b.product.priceText) + '</button></div>'
   );
 }
 
@@ -169,16 +173,20 @@ function viewCheckout() {
     stars: 'Telegram Stars ⭐',
   }[b.payment.mode];
 
+  const app = state.checkoutApp ? appBySlug(state.checkoutApp) : null;
+  const price = app ? app.priceText : b.product.priceText;
+
   return (
     stepper(1) +
     '<h1>Оформление заказа</h1>' +
     '<div class="card">' +
       '<div class="product">' +
-        '<div class="app-icon" style="background:var(--surface-3)"><span>📱</span></div>' +
-        '<div><div class="name">' + esc(b.product.title) + '</div>' +
-        '<div class="sub">UDID укажете следующим шагом</div></div>' +
+        (app ? iconHtml(app) : '<span class="app-icon" style="background:var(--surface-3)"><span>📱</span></span>') +
+        '<div><div class="name">' + esc(app ? app.name : 'Весь каталог') + '</div>' +
+        '<div class="sub">' + esc(app ? app.category : 'Все ' + b.product.appsCount + ' приложений') +
+        ' · UDID укажете следующим шагом</div></div>' +
       '</div>' +
-      '<div class="row"><span class="label">Цена</span><span class="value">' + esc(b.product.priceText) + '</span></div>' +
+      '<div class="row"><span class="label">Цена</span><span class="value">' + esc(price) + '</span></div>' +
       '<div class="row"><span class="label">Оплата</span><span class="value">' + esc(modeText) + '</span></div>' +
       (b.payment.mode === 'stars'
         ? '<div class="row"><span class="label">Сумма в Stars</span><span class="value">' + (b.payment.stars || '—') + '</span></div>'
@@ -216,7 +224,7 @@ function viewPayment(order) {
   return (
     stepper(1) +
     '<h1>Оплата заказа</h1>' +
-    '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.priceText) + '</p>' +
+    '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' + esc(order.priceText) + '</p>' +
     '<div class="card">' +
       (mode === 'manual'
         ? '<div class="body" style="white-space:pre-wrap">' + esc(b.payment.details || 'Реквизиты уточните у продавца.') + '</div>' +
@@ -233,7 +241,8 @@ function viewWaitingPayment(order) {
     stepper(1) +
     '<div class="pill">⏳ Оплата на проверке</div>' +
     '<h1>Проверяем платёж</h1>' +
-    '<p class="muted">Заказ ' + esc(order.code) + '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
+    '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) +
+      '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
     '<div class="card"><button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button></div>' +
     chatButton('Чат с продавцом') +
     '<button class="btn btn-ghost btn-sm" data-action="order-help">Помощь по заказу</button>'
@@ -250,7 +259,7 @@ function viewUdid(order) {
     '<div class="pill ok">✓ Оплата получена</div>' +
     '<h1>Теперь добавьте iPhone</h1>' +
     '<p class="muted">Отправьте UDID для заказа ' + esc(order.code) +
-      '. Перед передачей продавцу вы сможете проверить номер.</p>' +
+      ' — номер проверим при отправке.</p>' +
     '<details class="disclosure" open><summary>Где найти UDID?</summary>' +
       '<div class="body">Компьютер не нужен — всё делается на самом iPhone.\n\n' +
       '1. Откройте в Safari сайт udid.tech\n' +
@@ -267,6 +276,7 @@ function viewUdid(order) {
     '<div class="field">' +
       '<label for="udidInput">UDID устройства</label>' +
       '<input id="udidInput" class="udid" autocomplete="off" autocapitalize="off" spellcheck="false" ' +
+      'enterkeyhint="send" ' +
       'placeholder="40 символов" value="' + esc(state.udid) + '">' +
       '<div class="field-foot"><span>Можно вставить из буфера</span>' +
       '<span class="count' + (len === 40 ? ' full' : '') + '" id="udidCount">' + len + ' / 40</span></div>' +
@@ -275,12 +285,8 @@ function viewUdid(order) {
     (b.testUdid ? '<button class="linkish" data-action="udid-test">Использовать тестовый номер</button>' : '') +
     '<label class="check"><input type="checkbox" id="agreeUdid"' + (state.agreeUdid ? ' checked' : '') + '>' +
       '<span>Разрешаю передать UDID продавцу для обработки заказа.</span></label>' +
-    (state.udidChecked
-      ? '<div class="card tight"><div class="row"><span class="label">Проверено</span>' +
-        '<span class="value mono">' + esc(state.udidChecked) + '</span></div>' +
-        '<button class="btn btn-primary" data-action="udid-send">Отправить продавцу</button></div>'
-      : '<button class="btn btn-primary" id="udidBtn" data-action="udid-check"' + (ready ? '' : ' disabled') + '>' +
-        'Проверить номер →</button>') +
+    '<button class="btn btn-primary" id="udidBtn" data-action="udid-send"' + (ready ? '' : ' disabled') + '>' +
+      'Отправить продавцу →</button>' +
     '<div class="cta-note">' + esc(b.privacy) + '</div>'
   );
 }
@@ -436,6 +442,23 @@ function openChat(orderId, title, from) {
   });
 }
 
+function startCheckout(slug) {
+  const order = state.boot.order;
+  // Оплаченный заказ в работе не перенастраиваем — сначала его нужно довести.
+  if (order && order.isOpen && order.status !== 'new') {
+    state.newOrder = false;
+    state.view = 'order';
+    render();
+    toast('Сначала завершите заказ ' + order.code);
+    return;
+  }
+  state.checkoutApp = slug || null;
+  state.newOrder = true;
+  state.agreeTerms = false;
+  state.view = 'order';
+  render();
+}
+
 function confirmAction(message, onYes) {
   if (tg && tg.showConfirm) {
     tg.showConfirm(message, (ok) => { if (ok) onYes(); });
@@ -451,7 +474,6 @@ function chatButton(label) {
 }
 
 function viewOrderStatus(order) {
-  const b = state.boot;
   const step = order.step;
   const rows = STEP_LABELS.map((pair, i) => {
     const n = i + 1;
@@ -469,8 +491,10 @@ function viewOrderStatus(order) {
       '<span class="badge">' + esc(order.statusTitle) + '</span></div>' +
     '<div class="card">' +
       '<div class="product">' +
-        '<div class="app-icon" style="background:var(--surface-3)"><span>📱</span></div>' +
-        '<div><div class="name">' + esc(b.product.title) + '</div>' +
+        (appBySlug(order.app)
+          ? iconHtml(appBySlug(order.app))
+          : '<span class="app-icon" style="background:var(--surface-3)"><span>📱</span></span>') +
+        '<div><div class="name">' + esc(order.productName) + '</div>' +
         '<div class="sub">UDID ' + esc(order.udidMasked) + '</div></div>' +
       '</div>' +
       '<div class="timeline">' + rows + '</div>' +
@@ -504,9 +528,11 @@ function viewOrder() {
 
 function viewHelp() {
   const b = state.boot;
+  // Было перепутано: без SUPPORT_USERNAME кнопка закрывала приложение,
+  // а с ним вела в переписку заказа вместо поддержки.
   const support = b.support
-    ? '<button class="btn btn-secondary" data-action="chat">Написать @' + esc(b.support) + '</button>'
-    : '<button class="btn btn-secondary" data-action="support">Написать продавцу</button>';
+    ? '<button class="btn btn-secondary" data-action="support">Написать @' + esc(b.support) + '</button>'
+    : '<button class="btn btn-secondary" data-action="chat">💬 Написать продавцу</button>';
 
   return (
     '<h1>Помощь</h1>' +
@@ -597,16 +623,41 @@ function viewSeller() {
 
   return (
     '<h1>Заказы</h1>' +
-    '<input class="search" id="sellerSearch" placeholder="Код заказа, UDID или @юзернейм" value="' + esc(s.q) + '">' +
+    '<input class="search" id="sellerSearch" type="search" enterkeyhint="search" autocomplete="off" ' +
+      'placeholder="Код заказа, UDID или @юзернейм" value="' + esc(s.q) + '">' +
     '<div class="filters">' + filters.map(([key, label]) => {
       const n = key === 'all' || key === 'open' ? '' : ' · ' + (s.counts[key] || 0);
       return '<div class="chip' + (s.status === key ? ' active' : '') + '" data-action="seller-filter:' + key + '">' +
         esc(label) + esc(n) + '</div>';
     }).join('') + '</div>' +
-    (s.orders.length
-      ? s.orders.map(sellerLine).join('')
-      : '<div class="notice">Заказов в этом фильтре нет.</div>')
+    '<div id="sellerList">' + sellerListHtml() + '</div>'
   );
+}
+
+function sellerListHtml() {
+  const s = state.seller;
+  if (s.orders.length) return s.orders.map(sellerLine).join('');
+  return '<div class="notice">' + (s.q.trim() ? 'Ничего не нашли.' : 'Заказов в этом фильтре нет.') + '</div>';
+}
+
+let sellerSearchSeq = 0;
+
+async function refreshSellerList() {
+  // Перерисовываем только список: поле ввода остаётся на месте, фокус и клавиатура тоже.
+  const seq = ++sellerSearchSeq;
+  let data;
+  try {
+    data = await fetchSellerOrders();
+  } catch (err) {
+    if (seq === sellerSearchSeq) toast(err.message || 'Поиск не удался', true);
+    return;
+  }
+  // Ответ на устаревший запрос не должен перезаписать свежий результат.
+  if (seq !== sellerSearchSeq) return;
+  state.seller.orders = data.orders;
+  state.seller.counts = data.counts || {};
+  const list = document.getElementById('sellerList');
+  if (list) list.innerHTML = sellerListHtml();
 }
 
 /* ------------------------------------------------------------------- каркас */
@@ -645,6 +696,16 @@ function tabbar() {
   )).join('');
 }
 
+function screenKey() {
+  const o = state.boot && state.boot.order;
+  if (state.view === 'order') {
+    if (state.newOrder) return 'order:new:' + (state.checkoutApp || 'catalog');
+    return 'order:' + (o ? o.id + ':' + o.status : 'none');
+  }
+  if (state.view === 'seller') return 'seller:' + (state.seller.current ? state.seller.current.id : 'list');
+  return state.view;
+}
+
 function render() {
   const root = document.getElementById('view');
 
@@ -673,7 +734,11 @@ function render() {
 
   bindInputs();
   updateBackButton();
-  if (state.view !== 'chat') window.scrollTo(0, 0);
+  // Прокрутка наверх — только при переходе на другой экран. Перерисовка того же
+  // экрана (ошибка под полем, переключатель, фильтр) не должна уводить страницу.
+  const key = screenKey();
+  if (key !== state.screen && state.view !== 'chat') window.scrollTo(0, 0);
+  state.screen = key;
 }
 
 function updateBackButton() {
@@ -699,6 +764,17 @@ function bindInputs() {
       }
       const btn = document.getElementById('udidBtn');
       if (btn) btn.disabled = !(clean.length === 40 && state.agreeUdid);
+      // Старая ошибка к исправленному номеру уже не относится.
+      if (state.udidError) {
+        state.udidError = null;
+        const error = udid.parentElement.querySelector('.field-error');
+        if (error) error.remove();
+      }
+    });
+    udid.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      if (state.udid.length === 40 && state.agreeUdid) handleAction('udid-send');
     });
   }
 
@@ -726,7 +802,7 @@ function bindInputs() {
     search.addEventListener('input', () => {
       state.seller.q = search.value;
       clearTimeout(timer);
-      timer = setTimeout(() => loadSellerOrders().then(render), 350);
+      timer = setTimeout(refreshSellerList, 300);
     });
   }
 
@@ -776,10 +852,14 @@ async function refreshOrder() {
   state.boot.order = data.order;
 }
 
-async function loadSellerOrders() {
+function fetchSellerOrders() {
   const params = new URLSearchParams({ status: state.seller.status });
   if (state.seller.q.trim()) params.set('q', state.seller.q.trim());
-  const data = await api('/api/seller/orders?' + params.toString());
+  return api('/api/seller/orders?' + params.toString());
+}
+
+async function loadSellerOrders() {
+  const data = await fetchSellerOrders();
   state.seller.orders = data.orders;
   state.seller.counts = data.counts || {};
 }
@@ -797,14 +877,19 @@ async function sellerAction(action, extra) {
 const actions = {
   'support': () => {
     const username = state.boot && state.boot.support;
-    if (username && tg) tg.openTelegramLink('https://t.me/' + username);
-    else if (tg) tg.close();
+    if (!username) { toast('Контакт поддержки не указан', true); return; }
+    if (tg && tg.openTelegramLink) tg.openTelegramLink('https://t.me/' + username);
+    else window.open('https://t.me/' + username, '_blank');
   },
 
   'buy': () => guard(async () => {
-    const data = await api('/api/order/create', { method: 'POST' });
+    const data = await api('/api/order/create', {
+      method: 'POST',
+      body: { app: state.checkoutApp },
+    });
     state.boot.order = data.order;
     state.newOrder = false;
+    state.checkoutApp = null;
     state.view = 'order';
     toast('Заказ ' + data.order.code + ' создан');
     render();
@@ -845,28 +930,25 @@ const actions = {
     render();
   },
 
-  'udid-check': () => guard(async () => {
-    state.udidError = null;
-    const data = await api('/api/order/udid/check', { method: 'POST', body: { udid: state.udid } });
-    if (!data.valid) {
-      state.udidError = data.error;
-      state.udidChecked = null;
-      haptic('error');
-    } else {
-      state.udidChecked = data.masked;
-      haptic('success');
-    }
-    render();
-  }),
-
+  // Сервер проверяет номер сам, поэтому отдельный шаг «Проверить» не нужен:
+  // раньше после него страница уезжала наверх и кнопку приходилось искать и жать снова.
   'udid-send': () => guard(async () => {
-    const data = await api('/api/order/udid', {
-      method: 'POST',
-      body: { orderId: state.boot.order.id, udid: state.udid },
-    });
+    state.udidError = null;
+    let data;
+    try {
+      data = await api('/api/order/udid', {
+        method: 'POST',
+        body: { orderId: state.boot.order.id, udid: state.udid },
+      });
+    } catch (err) {
+      // Ошибку показываем под полем: её нужно прочитать и исправить номер.
+      state.udidError = err.message;
+      haptic('error');
+      render();
+      return;
+    }
     state.boot.order = data.order;
     state.udid = '';
-    state.udidChecked = null;
     state.agreeUdid = false;
     toast('UDID передан продавцу');
     render();
@@ -878,14 +960,11 @@ const actions = {
     render();
   }),
 
-  'back-to-order': () => { state.newOrder = false; render(); },
+  'back-to-order': () => { state.newOrder = false; state.checkoutApp = null; render(); },
 
-  'new-order': () => {
-    state.newOrder = true;
-    state.agreeTerms = false;
-    state.view = 'order';
-    render();
-  },
+  'new-order': () => startCheckout(null),
+
+  'buy-catalog': () => startCheckout(null),
 
   'open-udid-site': () => {
     if (tg && tg.openLink) tg.openLink('https://udid.tech');
@@ -920,8 +999,10 @@ const actions = {
 
   'chat': () => {
     const order = state.boot.order;
-    if (!order) { actions.support(); return; }
-    openChat(order.id, 'Заказ ' + order.code, 'order');
+    if (order) { openChat(order.id, 'Заказ ' + order.code, 'order'); return; }
+    if (state.boot.support) { actions.support(); return; }
+    // Переписка привязана к заказу; закрывать приложение вместо ответа нельзя.
+    toast('Переписка откроется после оформления заказа');
   },
 
   'seller-chat': () => {
@@ -993,6 +1074,7 @@ function handleAction(raw) {
     return;
   }
   if (kind === 'filter') { state.filter = value; render(); return; }
+  if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {
       const data = await api('/api/notify/order', {

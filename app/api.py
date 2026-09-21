@@ -84,6 +84,8 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "price": order["price_rub"],
         "priceText": texts.money(order["price_rub"]),
         "paymentMode": order["payment_mode"],
+        "app": order.get("app_slug"),
+        "productName": catalog.product_name(order.get("app_slug")),
         "udidMasked": udid_mod.mask(order.get("device_udid")),
         "hasUdid": bool(order.get("device_udid")),
         "instruction": order.get("instruction"),
@@ -158,7 +160,10 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "details": cfg.payment_details,
                 "stars": cfg.price_stars,
             },
-            "catalog": catalog.public_catalog(),
+            "catalog": [
+                dict(item, priceText=texts.money(item["price"]))
+                for item in catalog.public_catalog(cfg.price_rub)
+            ],
             "categories": list(catalog.CATEGORIES),
             "featured": list(catalog.FEATURED),
             "steps": list(const.STEP_NAMES),
@@ -187,7 +192,11 @@ async def get_order(request: web.Request) -> web.Response:
 async def create_order(request: web.Request) -> web.Response:
     user = await current_user(request)
     await db.upsert_user(user.id, user.username, user.first_name)
-    order, _created = await service_of(request).get_or_create_order(user.id)
+    data = await body(request)
+    app_slug = data.get("app") or None
+    if app_slug is not None and not isinstance(app_slug, str):
+        raise ApiError("Некорректное приложение")
+    order, _created = await service_of(request).get_or_create_order(user.id, app_slug)
     return web.json_response({"order": order_public(order)})
 
 

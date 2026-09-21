@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape
 
-from . import const, udid as udid_mod
+from . import catalog, const, udid as udid_mod
 
 DONE_MARK = "✅"
 CURRENT_MARK = "🔸"
@@ -71,7 +71,7 @@ HINTS = {
 def buyer_order_card(order: dict) -> str:
     head = "<b>Заказ %s</b>\n%s · %s" % (
         e(order["code"]),
-        e(order.get("product_title") or "Доступ для iPhone"),
+        e(catalog.product_name(order.get("app_slug"))),
         money(order["price_rub"]),
     )
     status = "Статус: <b>%s</b>" % e(const.TITLES.get(order["status"], order["status"]))
@@ -89,6 +89,7 @@ def seller_order_card(order: dict) -> str:
     lines = [
         "<b>Заказ %s</b> · %s" % (e(order["code"]), e(const.TITLES.get(order["status"], "—"))),
         "Покупатель: %s" % user_line(order),
+        "Товар: %s" % e(catalog.product_name(order.get("app_slug"))),
         "Сумма: %s · оплата: %s" % (money(order["price_rub"]), e(order["payment_mode"])),
     ]
     if order.get("device_udid"):
@@ -123,11 +124,17 @@ def payment_instructions(order: dict, details: str) -> str:
     body = e(details) if details else "Реквизиты уточните у продавца."
     return (
         "<b>Оплата заказа %s</b>\n"
-        "Сумма: <b>%s</b>\n\n"
+        "%s · <b>%s</b>\n\n"
         "%s\n\n"
         "Укажите в комментарии к платежу номер заказа <code>%s</code>, "
         "затем нажмите «Я оплатил» — продавец подтвердит поступление."
-    ) % (e(order["code"]), money(order["price_rub"]), body, e(order["code"]))
+    ) % (
+        e(order["code"]),
+        e(catalog.product_name(order.get("app_slug"))),
+        money(order["price_rub"]),
+        body,
+        e(order["code"]),
+    )
 
 
 def udid_request(guide_url: str = "") -> str:

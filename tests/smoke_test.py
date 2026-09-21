@@ -298,6 +298,45 @@ async def test_close_and_reorder(cfg, bot: FakeBot, svc: OrderService) -> None:
           any(ev["detail"] == "закрыт" for ev in events))
 
 
+async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nЗаказ конкретного приложения")
+    from app import catalog
+
+    bot.sent.clear()
+    order, created = await svc.get_or_create_order(BUYER, "chatgpt")
+    check("заказ на приложение создан", created and order["app_slug"] == "chatgpt")
+    check("без своей цены — общая", order["price_rub"] == cfg.price_rub)
+    check("продавец видит товар", any("Товар: ChatGPT" in t for t in bot.to(SELLER)))
+
+    same, created2 = await svc.get_or_create_order(BUYER, "claude")
+    check("неоплаченный заказ перенастроен на другое приложение",
+          not created2 and same["id"] == order["id"] and same["app_slug"] == "claude")
+
+    whole, _ = await svc.get_or_create_order(BUYER, None)
+    check("можно вернуться ко всему каталогу", whole["app_slug"] is None)
+
+    vk = catalog.get_app("vk")
+    vk["price"] = 990
+    try:
+        priced, _ = await svc.get_or_create_order(BUYER, "vk")
+        check("своя цена приложения применяется", priced["price_rub"] == 990)
+    finally:
+        vk.pop("price", None)
+
+    try:
+        await svc.get_or_create_order(BUYER, "нет-такого")
+        check("неизвестное приложение отклонено", False)
+    except ServiceError:
+        check("неизвестное приложение отклонено", True)
+
+    await svc.claim_payment(order["id"], BUYER)
+    kept, _ = await svc.get_or_create_order(BUYER, "ozon")
+    check("заказ с заявленной оплатой не перенастраивается",
+          kept["app_slug"] == "vk" and kept["status"] == const.PAYMENT_CHECK)
+
+    await svc.cancel(order["id"], "test", by_seller=True)
+
+
 async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nHTTP API Mini App")
     app = build_app(cfg, bot, svc)
@@ -437,6 +476,20 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
             json={"kind": const.NOTIFY_STATUS, "enabled": True},
         )
 
+        res = await client.get("/api/bootstrap", headers=buyer_headers)
+        items = (await res.json())["catalog"]
+        check("у приложений в витрине есть цена",
+              all(a["price"] and a["priceText"] for a in items))
+
+        res = await client.post("/api/order/create", headers=buyer_headers, json={"app": "chatgpt"})
+        created = (await res.json())["order"]
+        check("заказ приложения через API",
+              created["app"] == "chatgpt" and created["productName"] == "ChatGPT")
+        await client.post("/api/order/cancel", headers=buyer_headers, json={"orderId": created["id"]})
+
+        res = await client.post("/api/order/create", headers=buyer_headers, json={"app": "нет"})
+        check("неизвестное приложение через API — 400", res.status == 400)
+
         res = await client.get("/health")
         check("healthcheck отвечает", res.status == 200)
 
@@ -469,6 +522,7 @@ async def main() -> int:
     await test_chat(cfg, bot, svc)
     await test_notify(cfg, bot, svc)
     await test_close_and_reorder(cfg, bot, svc)
+    await test_app_orders(cfg, bot, svc)
 
     await db.close()
 

@@ -51,6 +51,27 @@ def _letter(name: str) -> str:
     return name[0].upper()
 
 
+CATALOG_NAME = "Весь каталог"
+
+
+def get_app(slug: str | None) -> dict | None:
+    if not slug:
+        return None
+    return next((a for a in APPS if a["slug"] == slug), None)
+
+
+def app_price(app: dict | None, default: int) -> int:
+    """Своя цена приложения — ключ price в APPS; без него действует общая."""
+    if app and app.get("price"):
+        return int(app["price"])
+    return default
+
+
+def product_name(slug: str | None) -> str:
+    app = get_app(slug)
+    return app["name"] if app else CATALOG_NAME
+
+
 def icon_files() -> dict[str, str]:
     """Какая картинка лежит для каждого слага. Файл можно добавить на лету."""
     found: dict[str, str] = {}
@@ -66,7 +87,7 @@ def icon_files() -> dict[str, str]:
     return found
 
 
-def public_catalog() -> list[dict]:
+def public_catalog(default_price: int) -> list[dict]:
     icons = icon_files()
     return [
         {
@@ -77,6 +98,7 @@ def public_catalog() -> list[dict]:
             "dark": bool(a.get("dark")),
             "letter": _letter(a["name"]),
             "icon": icons.get(a["slug"]),
+            "price": app_price(a, default_price),
         }
         for a in APPS
     ]

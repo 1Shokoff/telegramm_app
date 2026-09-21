@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS orders (
     status       TEXT    NOT NULL,
     price_rub    INTEGER NOT NULL,
     payment_mode TEXT    NOT NULL,
+    app_slug     TEXT,
     payment_ref  TEXT,
     device_udid  TEXT,
     instruction  TEXT,
@@ -121,6 +122,10 @@ async def _migrate() -> None:
             await conn().execute("ALTER TABLE orders RENAME COLUMN %s TO %s" % (old, new))
             log.info("Миграция: колонка %s переименована в %s", old, new)
     await conn().execute("UPDATE orders SET status = ? WHERE status = 'imei'", (const.UDID,))
+    # Заказы до выбора отдельных приложений — это заказы всего каталога (NULL).
+    if "app_slug" not in columns:
+        await conn().execute("ALTER TABLE orders ADD COLUMN app_slug TEXT")
+        log.info("Миграция: добавлена колонка orders.app_slug")
     await conn().commit()
 
 
@@ -177,14 +182,16 @@ async def set_blocked(tg_id: int, blocked: bool) -> None:
 # --------------------------------------------------------------- orders
 
 
-async def create_order(user_id: int, price_rub: int, payment_mode: str, prefix: str) -> dict:
+async def create_order(
+    user_id: int, price_rub: int, payment_mode: str, prefix: str, app_slug: str | None = None
+) -> dict:
     ts = now()
     cur = await conn().execute(
         """
-        INSERT INTO orders (code, user_id, status, price_rub, payment_mode, created_at, updated_at)
-        VALUES ('', ?, ?, ?, ?, ?, ?)
+        INSERT INTO orders (code, user_id, status, price_rub, payment_mode, app_slug, created_at, updated_at)
+        VALUES ('', ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, const.NEW, price_rub, payment_mode, ts, ts),
+        (user_id, const.NEW, price_rub, payment_mode, app_slug, ts, ts),
     )
     order_id = int(cur.lastrowid)
     code = "%s-%04d" % (prefix, order_id)
@@ -194,6 +201,17 @@ async def create_order(user_id: int, price_rub: int, payment_mode: str, prefix: 
     order = await get_order(order_id)
     assert order is not None
     return order
+
+
+async def set_order_product(order_id: int, app_slug: str | None, price_rub: int) -> dict | None:
+    """Смена товара у неоплаченного заказа — покупатель передумал до оплаты."""
+    await conn().execute(
+        "UPDATE orders SET app_slug = ?, price_rub = ?, updated_at = ? WHERE id = ?",
+        (app_slug, price_rub, now(), order_id),
+    )
+    await conn().commit()
+    await add_event(order_id, "system", "product", app_slug or "catalog")
+    return await get_order(order_id)
 
 
 async def get_order(order_id: int) -> dict | None:

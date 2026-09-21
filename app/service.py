@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup
 
-from . import const, db, keyboards, texts, udid as udid_mod
+from . import catalog, const, db, keyboards, texts, udid as udid_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -94,17 +94,32 @@ class OrderService:
 
     # ------------------------------------------------------------- заказы
 
-    async def get_or_create_order(self, user_id: int) -> tuple[dict, bool]:
-        """Возвращает (заказ, создан_ли). Один открытый заказ на пользователя."""
+    async def get_or_create_order(
+        self, user_id: int, app_slug: str | None = None
+    ) -> tuple[dict, bool]:
+        """Возвращает (заказ, создан_ли). Один открытый заказ на пользователя.
+
+        app_slug — конкретное приложение из каталога, None — весь каталог.
+        Неоплаченный заказ перенастраивается на новый выбор; заказ, по которому
+        уже заявлена оплата, не трогаем — деньги могли уйти за другой товар.
+        """
+        if app_slug is not None and catalog.get_app(app_slug) is None:
+            raise ServiceError("Такого приложения нет в каталоге.")
+        price = catalog.app_price(catalog.get_app(app_slug), self.cfg.price_rub)
+
         existing = await db.get_active_order(user_id)
         if existing and existing["status"] in const.OPEN_STATUSES:
+            changed = existing.get("app_slug") != app_slug or existing["price_rub"] != price
+            if existing["status"] == const.NEW and changed:
+                existing = await db.set_order_product(existing["id"], app_slug, price)
             return existing, False
 
         order = await db.create_order(
             user_id=user_id,
-            price_rub=self.cfg.price_rub,
+            price_rub=price,
             payment_mode=self.cfg.payment_mode,
             prefix=self.cfg.order_prefix,
+            app_slug=app_slug,
         )
         await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>", const.NOTIFY_NEW_ORDER)
         return order, True
