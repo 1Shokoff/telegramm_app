@@ -108,7 +108,7 @@ def welcome(first_name: str | None, price_rub: int, apps_count: int) -> str:
     hello = "Привет, %s!" % name if name else "Привет!"
     return (
         "%s\n\n"
-        "<b>Все приложения. Одна цена.</b>\n"
+        "<b>iApki — твои приложения снова на iPhone.</b>\n"
         "Весь каталог из %d приложений за %s. "
         "Без лимита установок и доплат за приложения.\n\n"
         "Как это работает:\n"

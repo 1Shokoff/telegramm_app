@@ -131,7 +131,7 @@ async def main() -> int:
 
     print("\nПокупатель")
     await dp.feed_update(bot, message_update(BUYER, "/start"))
-    check("/start отвечает витриной", any("Все приложения" in t for t in bot.texts_to(BUYER)))
+    check("/start отвечает витриной", any("iApki" in t for t in bot.texts_to(BUYER)))
 
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "nav:buy_confirm"))

@@ -647,3 +647,14 @@ body { background-image: radial-gradient(ellipse at 85% 0%, #c8ff310c, transpare
 .card { box-shadow: 0 5px 22px #0000000a; }
 @media (max-width: 350px) { .hero { padding: 18px; } .cluster { gap: 6px; } .cluster .app-icon { width: 36px; height: 36px; } .app-card { padding: 12px; } .brand-sub { font-size: 11px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
+
+/* Экран загрузки со знаком iApki */
+.loader { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 18vh; }
+.loader img { border-radius: 18px; animation: loader-pulse 1.4s ease-in-out infinite; }
+@keyframes loader-pulse { 50% { opacity: .55; transform: scale(.96); } }
+@media (prefers-reduced-motion: reduce) { .loader img { animation: none; } }
+
+/* Иконки в шапке витрины — всегда одним рядом, как в макете: на экранах
+   уже ~390px шесть плиток по 43px не помещались и последняя уезжала вниз. */
+.cluster { flex-wrap: nowrap; }
+.cluster .app-icon { flex: 1 1 0; min-width: 0; max-width: 48px; height: auto; aspect-ratio: 1 / 1; }

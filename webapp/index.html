@@ -6,6 +6,8 @@
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#0b0d09">
   <title>iApki</title>
+  <link rel="icon" type="image/svg+xml" href="/static/brand/icon.svg">
+  <link rel="apple-touch-icon" href="/static/brand.png">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -14,7 +16,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-icon" aria-hidden="true">
-          <img src="/static/brand.png" alt="iApki" width="44" height="44">
+          <img src="/static/brand/icon.svg" alt="iApki" width="44" height="44">
         </div>
         <div class="brand-text">
           <div class="brand-title">iApki</div>
@@ -29,7 +31,10 @@
     </header>
 
     <main id="view" class="view">
-      <div class="loader">Загружаем…</div>
+      <div class="loader">
+        <img src="/static/brand/icon.svg" alt="" width="64" height="64">
+        <span>Загружаем…</span>
+      </div>
     </main>
 
     <nav class="tabbar" id="tabbar"></nav>
