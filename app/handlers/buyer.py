@@ -3,15 +3,20 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
 from .. import catalog, const, db, keyboards, texts, udid as udid_mod
-from ..config import Config
+from ..config import ROOT, Config
 from ..service import OrderService, ServiceError
 
 log = logging.getLogger(__name__)
 router = Router(name="buyer")
+
+WELCOME_PHOTO = ROOT / "app" / "assets" / "welcome.jpg"
+# После первой загрузки Telegram отдаёт file_id — дальше шлём по нему, файл не грузим заново.
+_photo_ids: dict[str, str] = {}
 
 
 async def _remember(message: Message) -> None:
@@ -24,14 +29,34 @@ async def _show_order(target: Message, cfg: Config, order: dict) -> None:
     await target.answer(texts.buyer_order_card(order), reply_markup=keyboards.buyer_order_kb(cfg, order))
 
 
+async def _send_welcome(message: Message, text: str, kb: InlineKeyboardMarkup) -> None:
+    """Приветствие — картинка с подписью. Нет файла или Telegram её не принял — просто текст."""
+    photo = _photo_ids.get("welcome")
+    if photo is None and WELCOME_PHOTO.is_file():
+        photo = FSInputFile(WELCOME_PHOTO)
+    if photo is None:
+        await message.answer(text, reply_markup=kb)
+        return
+    try:
+        sent = await message.answer_photo(photo, caption=text, reply_markup=kb)
+    except TelegramAPIError as exc:
+        log.warning("Приветствие ушло без картинки: %s", exc)
+        _photo_ids.pop("welcome", None)
+        await message.answer(text, reply_markup=kb)
+        return
+    if sent.photo:
+        _photo_ids["welcome"] = sent.photo[-1].file_id
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, cfg: Config) -> None:
     await _remember(message)
     order = await db.get_active_order(message.from_user.id)
     has_open = bool(order and order["status"] in const.OPEN_STATUSES)
-    await message.answer(
+    await _send_welcome(
+        message,
         texts.welcome(message.from_user.first_name, cfg.price_rub, catalog.count()),
-        reply_markup=keyboards.start_kb(cfg, has_open),
+        keyboards.start_kb(cfg, has_open),
     )
 
 

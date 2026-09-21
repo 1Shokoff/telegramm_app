@@ -32,8 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aiogram import Bot  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
 from aiogram.enums import ParseMode  # noqa: E402
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage  # noqa: E402
-from aiogram.types import CallbackQuery, Chat, Message, Update, User  # noqa: E402
+from aiogram.exceptions import TelegramBadRequest  # noqa: E402
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage, SendPhoto  # noqa: E402
+from aiogram.types import CallbackQuery, Chat, FSInputFile, Message, PhotoSize, Update, User  # noqa: E402
 
 from app import const, db  # noqa: E402
 from app.config import load_config  # noqa: E402
@@ -58,9 +59,19 @@ class StubBot(Bot):
     def __init__(self) -> None:
         super().__init__(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.calls: list[object] = []
+        self.reject_photos = False
 
     async def __call__(self, method, request_timeout=None):
         self.calls.append(method)
+        if isinstance(method, SendPhoto):
+            if self.reject_photos:
+                raise TelegramBadRequest(method=method, message="Bad Request: wrong file")
+            return make_message(
+                chat_id=method.chat_id,
+                text=method.caption or "",
+                from_bot=True,
+                photo=[PhotoSize(file_id="photo-file-id", file_unique_id="u1", width=1254, height=1254)],
+            )
         if isinstance(method, (SendMessage, EditMessageText)):
             return make_message(
                 chat_id=getattr(method, "chat_id", BUYER),
@@ -70,17 +81,35 @@ class StubBot(Bot):
         return True
 
     def texts_to(self, chat_id: int) -> list[str]:
-        return [
-            m.text for m in self.calls
-            if isinstance(m, (SendMessage, EditMessageText)) and getattr(m, "chat_id", None) == chat_id
-        ]
+        """Тексты сообщений и подписи к картинкам."""
+        out = []
+        for m in self.calls:
+            if getattr(m, "chat_id", None) != chat_id:
+                continue
+            if isinstance(m, (SendMessage, EditMessageText)):
+                out.append(m.text)
+            elif isinstance(m, SendPhoto):
+                out.append(m.caption or "")
+        return out
+
+    def photos_to(self, chat_id: int) -> list[SendPhoto]:
+        return [m for m in self.calls if isinstance(m, SendPhoto) and m.chat_id == chat_id]
 
     def reset(self) -> None:
         self.calls.clear()
 
 
-def make_message(chat_id: int, text: str, from_bot: bool = False) -> Message:
+def make_message(chat_id: int, text: str, from_bot: bool = False, photo: list | None = None) -> Message:
     counter["id"] += 1
+    if photo:
+        return Message(
+            message_id=counter["id"],
+            date=datetime.now(timezone.utc),
+            chat=Chat(id=chat_id, type="private"),
+            from_user=User(id=0, is_bot=True, first_name="Бот"),
+            photo=photo,
+            caption=text,
+        )
     return Message(
         message_id=counter["id"],
         date=datetime.now(timezone.utc),
@@ -132,6 +161,26 @@ async def main() -> int:
     print("\nПокупатель")
     await dp.feed_update(bot, message_update(BUYER, "/start"))
     check("/start отвечает витриной", any("iApki" in t for t in bot.texts_to(BUYER)))
+    photos = bot.photos_to(BUYER)
+    check(
+        "приветствие — картинка с подписью и кнопками",
+        len(photos) == 1 and isinstance(photos[0].photo, FSInputFile) and photos[0].reply_markup is not None,
+    )
+    check("приветствие не дублируется текстом", not any(isinstance(m, SendMessage) for m in bot.calls))
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/start"))
+    photos = bot.photos_to(BUYER)
+    check("повторный /start шлёт картинку по file_id", len(photos) == 1 and photos[0].photo == "photo-file-id")
+
+    bot.reset()
+    bot.reject_photos = True
+    await dp.feed_update(bot, message_update(BUYER, "/start"))
+    bot.reject_photos = False
+    check(
+        "картинку не приняли — приветствие уходит текстом",
+        any(isinstance(m, SendMessage) and "iApki" in m.text for m in bot.calls),
+    )
 
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "nav:buy_confirm"))
