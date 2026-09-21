@@ -1,4 +1,4 @@
-/* Mini App «Нужные приложения» — витрина, заказ и панель продавца. */
+/* Mini App «iApki» — витрина, заказ и панель продавца. */
 
 const tg = window.Telegram && window.Telegram.WebApp;
 
@@ -126,7 +126,7 @@ function viewHome() {
         '<span class="eyebrow">Приложения для iPhone</span>' +
         '<span class="badge">iOS</span>' +
       '</div>' +
-      '<h1>Все приложения.<br>Одна цена.</h1>' +
+      '<h1>Твои приложения.<br><em>Снова на iPhone.</em></h1>' +
       '<p>Весь каталог за ' + esc(b.product.priceText) + '. Без лимита установок и доплат за приложения.</p>' +
       '<div class="cluster">' + featured.map((a) => iconHtml(a)).join('') + '</div>' +
       '<button class="btn btn-primary" data-action="tab:order">Весь каталог · ' + esc(b.product.priceText) + ' →</button>' +
@@ -149,8 +149,9 @@ function viewApps() {
     : b.catalog.filter((a) => a.category === state.filter);
 
   return (
+    '<h1>Каталог</h1><p class="muted">Все нужные приложения — в одном месте.</p>' +
     '<div class="filters">' + cats.map((c) => (
-      '<div class="chip' + (c === state.filter ? ' active' : '') + '" data-action="filter:' + esc(c) + '">' + esc(c) + '</div>'
+      '<button class="chip' + (c === state.filter ? ' active' : '') + '" aria-pressed="' + (c === state.filter) + '" data-action="filter:' + esc(c) + '">' + esc(c) + '</button>'
     )).join('') + '</div>' +
     '<div class="grid">' + list.map(appCard).join('') + '</div>' +
     '<div class="cta-note mt">Состав услуги и совместимость подтвердим до открытия продаж.</div>' +
@@ -610,6 +611,17 @@ function viewSeller() {
 
 /* ------------------------------------------------------------------- каркас */
 
+function navIcon(key) {
+  const paths = {
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+    apps: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+    order: '<rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 12h6M9 16h4"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5M12 17h.01"/>',
+    seller: '<rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
+  };
+  return '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[key] + '</svg>';
+}
+
 function tabbar() {
   const b = state.boot;
   const order = b.order;
@@ -626,7 +638,7 @@ function tabbar() {
 
   return tabs.map(([key, label, icon]) => (
     '<button class="' + (state.view === key ? 'on' : '') + '" data-action="tab:' + key + '">' +
-    '<span>' + icon + '</span>' +
+    navIcon(key) +
     ((key === 'order' && alert) || (key === 'seller' && sellerAlert)
       ? '<span class="dot-badge"></span>' : '') +
     '<span>' + esc(label) + '</span></button>'
@@ -1029,7 +1041,11 @@ function isLight() {
 }
 
 function applyTheme() {
-  document.documentElement.dataset.theme = isLight() ? 'light' : 'dark';
+  const light = isLight();
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  const bg = light ? '#f4f6ef' : '#0b0d09';
+  document.querySelector('meta[name="theme-color"]').content = bg;
+  try { if (tg) { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } } catch (e) { /* старый клиент */ }
 }
 
 async function boot() {
@@ -1039,7 +1055,7 @@ async function boot() {
     tg.ready();
     tg.expand();
     if (tg.onEvent) tg.onEvent('themeChanged', applyTheme);
-    try { tg.setHeaderColor(isLight() ? '#f2f2f7' : '#000000'); } catch (e) { /* старый клиент */ }
+
     if (tg.BackButton) {
       tg.BackButton.onClick(() => {
         if (state.seller.current) state.seller.current = null;

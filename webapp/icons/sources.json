@@ -1,0 +1,215 @@
+{
+  "vk": {
+    "url": "https://www.google.com/s2/favicons?domain=vk.com&sz=128",
+    "source": "https://vk.com",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "chatgpt": {
+    "name": "ChatGPT",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/15/ec/71/15ec7161-5fae-4018-f178-8ab4f0b1a02d/AppIcon-0-0-1x_U007epad-0-0-0-1-0-P3-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/us/app/chatgpt/id6448311069?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "claude": {
+    "name": "Claude by Anthropic",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/4e/98/52/4e9852f9-553a-5c52-3097-3417caedb04b/AppIcon-0-0-1x_U007epad-0-1-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/us/app/claude-by-anthropic/id6473753684?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "avito": {
+    "url": "https://www.google.com/s2/favicons?domain=avito.ru&sz=128",
+    "source": "https://avito.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "telegram": {
+    "name": "Telegram Messenger",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/01/b6/99/01b699a0-d264-d1c3-c798-50aedd0be3db/Telegram-0-0-1x_U007epad-0-1-0-sRGB-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/telegram-messenger/id686449807?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "deepseek": {
+    "name": "DeepSeek - AI Ассистент",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/50/1f/00/501f008c-b53d-7535-506a-f276dc45300b/AppIcon-0-0-1x_U007epad-0-1-0-sRGB-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/deepseek-ai-%D0%B0%D1%81%D1%81%D0%B8%D1%81%D1%82%D0%B5%D0%BD%D1%82/id6737597349?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "perplexity": {
+    "name": "Perplexity — ИИ-поиск и чат",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/66/0f/95/660f957e-f598-1f23-1475-1881df5f24af/AppIcon-0-0-1x_U007epad-0-0-0-1-0-0-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/perplexity-%D0%B8%D0%B8-%D0%BF%D0%BE%D0%B8%D1%81%D0%BA-%D0%B8-%D1%87%D0%B0%D1%82/id1668000334?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "ozon": {
+    "name": "OZON: товары, одежда, билеты",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/c7/0a/af/c70aaf39-9b74-dd13-e6c8-2b98aadaf3a8/AppIcon-0-0-1x_U007epad-0-1-0-sRGB-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/ozon-%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D1%8B-%D0%BE%D0%B4%D0%B5%D0%B6%D0%B4%D0%B0-%D0%B1%D0%B8%D0%BB%D0%B5%D1%82%D1%8B/id407804998?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "wildberries": {
+    "name": "WILDBERRIES",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/02/64/7f/02647f75-b632-b874-7c2d-b5c17d97f3d5/AppIcon-0-0-1x_U007epad-0-1-0-sRGB-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/wildberries/id597880187?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "yandex-market": {
+    "url": "https://www.google.com/s2/favicons?domain=market.yandex.ru&sz=128",
+    "source": "https://market.yandex.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "gosuslugi": {
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/20/d6/40/20d6403c-5d62-ab46-3ac8-40b2415731d8/AppIcon-0-1x_U007epad-0-1-85-220-0.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/%D0%B3%D0%BE%D1%81%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8/id1367959794?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "rzd": {
+    "url": "https://play-lh.googleusercontent.com/XYLpxxv0oR4boIYUPw940KbGCX-KWNsCWqjEPL0QxEKhlkZqhivsJ3MY1-3z-_OArxS0pmoYzRi7DtOlIyfC=s0-br30",
+    "source": "https://play.google.com/store/apps/details?hl=ru&id=ru.rzd.pass",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "2gis": {
+    "name": "2ГИС: карты, навигатор, друзья",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/69/35/07/69350728-6f8a-97c0-308f-53db2addee3d/MainAppIcon-0-0-1x_U007epad-0-1-0-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/2%D0%B3%D0%B8%D1%81-%D0%BA%D0%B0%D1%80%D1%82%D1%8B-%D0%BD%D0%B0%D0%B2%D0%B8%D0%B3%D0%B0%D1%82%D0%BE%D1%80-%D0%B4%D1%80%D1%83%D0%B7%D1%8C%D1%8F/id481627348?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "yandex-go": {
+    "name": "Яндекс Go: Такси Еда Доставка",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/73/23/ea/7323eae9-36a3-da50-cddf-8382594fd0c0/AppIcon-0-0-1x_U007emarketing-0-6-0-0-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/%D1%8F%D0%BD%D0%B4%D0%B5%D0%BA%D1%81-go-%D1%82%D0%B0%D0%BA%D1%81%D0%B8-%D0%B5%D0%B4%D0%B0-%D0%B4%D0%BE%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B0/id472650686?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "yandex-music": {
+    "name": "Яндекс Музыка, книги, подкасты",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/b9/41/e0/b941e0a0-b7cc-6f20-1d42-f0fbbfd753cb/AppIcon-0-0-1x_U007epad-0-1-0-0-sRGB-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/%D1%8F%D0%BD%D0%B4%D0%B5%D0%BA%D1%81-%D0%BC%D1%83%D0%B7%D1%8B%D0%BA%D0%B0-%D0%BA%D0%BD%D0%B8%D0%B3%D0%B8-%D0%BF%D0%BE%D0%B4%D0%BA%D0%B0%D1%81%D1%82%D1%8B/id520797969?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "kinopoisk": {
+    "name": "Кинопоиск－фильмы，сериалы，спорт",
+    "url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/84/6c/24/846c24eb-d4e7-f5ba-2573-adf04b4504fa/AppIcon-0-0-1x_U007epad-0-1-0-85-220.png/512x512bb.jpg",
+    "source": "https://apps.apple.com/ru/app/%D0%BA%D0%B8%D0%BD%D0%BE%D0%BF%D0%BE%D0%B8%D1%81%D0%BA-%D1%84%D0%B8%D0%BB%D1%8C%D0%BC%D1%8B-%D1%81%D0%B5%D1%80%D0%B8%D0%B0%D0%BB%D1%8B-%D1%81%D0%BF%D0%BE%D1%80%D1%82/id477718890?uo=4",
+    "dimensions": [
+      512,
+      512
+    ]
+  },
+  "sber": {
+    "url": "https://www.google.com/s2/favicons?domain=sberbank.ru&sz=128",
+    "source": "https://sberbank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "alfa": {
+    "url": "https://www.google.com/s2/favicons?domain=alfabank.ru&sz=128",
+    "source": "https://alfabank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "tbank": {
+    "url": "https://www.google.com/s2/favicons?domain=tbank.ru&sz=128",
+    "source": "https://tbank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "vtb": {
+    "url": "https://www.google.com/s2/favicons?domain=online.vtb.ru&sz=128",
+    "source": "https://online.vtb.ru",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "gazprombank": {
+    "url": "https://www.google.com/s2/favicons?domain=gazprombank.ru&sz=128",
+    "source": "https://gazprombank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "psb": {
+    "url": "https://www.google.com/s2/favicons?domain=psbank.ru&sz=128",
+    "source": "https://psbank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "sovcombank": {
+    "url": "https://www.google.com/s2/favicons?domain=sovcombank.ru&sz=128",
+    "source": "https://sovcombank.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  },
+  "raiffeisen": {
+    "url": "https://www.google.com/s2/favicons?domain=raiffeisen.ru&sz=128",
+    "source": "https://raiffeisen.ru",
+    "type": "Official site brand icon (favicon)",
+    "dimensions": [
+      128,
+      128
+    ]
+  }
+}

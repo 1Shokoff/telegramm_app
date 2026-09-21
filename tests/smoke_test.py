@@ -442,7 +442,7 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
 
         res = await client.get("/")
         body = await res.text()
-        check("index.html отдаётся", res.status == 200 and "Нужные приложения" in body)
+        check("index.html отдаётся", res.status == 200 and "iApki" in body)
 
         res = await client.get("/static/app.js")
         check("статика отдаётся", res.status == 200)

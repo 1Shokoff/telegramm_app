@@ -1,12 +1,12 @@
 :root {
-  --bg: #000000;
-  --surface: #141416;
-  --surface-2: #1c1c1f;
-  --surface-3: #232327;
-  --line: #2a2a2e;
+  --bg: #0b0d09;
+  --surface: #171a14;
+  --surface-2: #20241b;
+  --surface-3: #2a3023;
+  --line: #30362a;
   --text: #ffffff;
-  --muted: #8e8e93;
-  --accent: #ffffff;
+  --muted: #a5ad9a;
+  --accent: #c8ff31;
   --accent-text: #000000;
   --ok: #30d158;
   --warn: #ffd60a;
@@ -18,15 +18,15 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #f2f2f7;
+  --bg: #f4f6ef;
   --surface: #ffffff;
   --surface-2: #ffffff;
   --surface-3: #f2f2f7;
   --line: #e2e2e7;
   --text: #0b0b0c;
   --muted: #6e6e73;
-  --accent: #0b0b0c;
-  --accent-text: #ffffff;
+  --accent: #c8ff31;
+  --accent-text: #101407;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -600,3 +600,50 @@ body.chat-mode .view { padding-bottom: 110px; }
   margin-top: 12px;
   border: 1px solid var(--line);
 }
+
+/* iApki — фирменная палитра и мобильная витрина */
+:root { --brand: #c8ff31; --radius-l: 26px; --radius-m: 18px; }
+:root[data-theme="light"] { --line: #dce2d2; --surface-2: #edf1e6; --surface-3: #e5ebdb; --muted: #606955; }
+body { background-image: radial-gradient(ellipse at 85% 0%, #c8ff310c, transparent 460px); }
+.topbar { padding: 18px 0; gap: 10px; }
+.brand-icon { width: 44px; height: 44px; flex-basis: 44px; border-radius: 14px; overflow: hidden; background: var(--brand); }
+.brand-icon img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.brand-title { font-size: 23px; font-weight: 800; letter-spacing: -1px; }
+.brand-sub { font-size: 12px; margin-top: 1px; }
+.hero { position: relative; overflow: hidden; padding: 24px; background: radial-gradient(ellipse at 100% 0%, #c8ff3126, transparent 70%), var(--surface); border-color: #c8ff3140; }
+.hero h1 { font-size: clamp(30px, 8.5vw, 40px); font-weight: 800; letter-spacing: -1.5px; line-height: 1.06; margin-bottom: 14px; }
+.hero h1 em { color: var(--brand); font-style: normal; }
+:root[data-theme="light"] .hero h1 em { color: #486500; }
+.hero p { max-width: 340px; line-height: 1.55; font-size: 14px; }
+.hero .badge { background: var(--brand); color: #101407; border: 0; font-weight: 800; padding: 5px 10px; }
+.eyebrow { font-size: 10px; letter-spacing: 1.5px; font-weight: 600; }
+.cluster { padding: 0; margin: 22px 0; gap: 8px; flex-wrap: wrap; }
+.cluster .app-icon { width: 43px; height: 43px; margin: 0; box-shadow: 0 4px 10px #0003; border-radius: 13px; }
+.btn { transition: transform .15s, opacity .15s, background .15s; }
+.btn-primary { font-weight: 750; box-shadow: 0 5px 22px #c8ff3114; }
+.btn:active { transform: scale(.98); }
+.flowline { font-size: 11px; gap: 5px; padding: 5px 0 21px; flex-wrap: wrap; }
+.flowline .sep { color: var(--brand); }
+.section-head { margin-top: 8px; margin-bottom: 14px; gap: 8px; }
+.section-head h2 { font-size: 19px; }
+.section-head button { color: var(--text); font-size: 12px; padding: 8px 10px; border-radius: 12px; background: var(--surface-3); }
+.grid { gap: 12px; }
+.app-card { min-height: 146px; padding: 16px; background: linear-gradient(145deg, var(--surface-2), var(--surface)); border-radius: 22px; }
+.app-card .app-icon { width: 52px; height: 52px; border-radius: 15px; margin-bottom: 12px; box-shadow: 0 4px 10px #0002; }
+.app-card .name { font-size: 14px; line-height: 1.3; }
+.app-card .cat { font-size: 11px; margin-top: 3px; }
+.app-card .arrow { display: none; }
+.filters .chip { font-family: inherit; min-height: 42px; border-radius: 14px; }
+.tabbar { max-width: 560px; margin: 0 auto; padding-top: 10px; }
+.tabbar button { gap: 5px; min-height: 49px; }
+.tabbar button.on { color: var(--brand); }
+:root[data-theme="light"] .tabbar button.on { color: #486500; }
+.nav-icon { width: 22px; height: 22px; }
+.tabbar button.on .nav-icon { filter: drop-shadow(0 0 8px #c8ff3133); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.search:focus, textarea:focus, .field input:focus { border-color: var(--accent); }
+.switch:checked { background: var(--brand); }
+.switch:checked::after { background: #101407; }
+.card { box-shadow: 0 5px 22px #0000000a; }
+@media (max-width: 350px) { .hero { padding: 18px; } .cluster { gap: 6px; } .cluster .app-icon { width: 36px; height: 36px; } .app-card { padding: 12px; } .brand-sub { font-size: 11px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
