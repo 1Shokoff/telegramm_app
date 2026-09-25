@@ -489,6 +489,8 @@ textarea {
 }
 
 .search {
+  /* input по умолчанию строчный: без display: block его не выровнять автополями. */
+  display: block;
   width: 100%;
   background: var(--surface-2);
   border: 1px solid var(--line);
@@ -890,35 +892,28 @@ button.brand:active { opacity: .75; }
 /* Блок идёт последним: он должен перебивать правила выше. */
 @media (min-width: 900px) {
   .shell { max-width: 1120px; padding: 0 32px; }
-  .topbar { order: 1; padding: calc(26px + var(--tg-top, 0px)) 0 14px; }
+  /* Шапка — только логотип: со строкой разделов она выходила слишком толстой.
+     Правое поле отодвигает кнопки помощи и переписки от края. */
+  .topbar { order: 1; padding: calc(20px + var(--tg-top, 0px)) 40px 12px 0; }
   .brand-title { font-size: 26px; }
   .brand-sub { font-size: 13px; }
-  /* Растворение переезжает под строку разделов — она теперь ниже шапки. */
-  .topbar::after { display: none; }
 
-  /* Нижняя панель на большом экране неуместна: разделы липнут под шапкой.
-     У флекс-элементов z-index работает и без позиционирования, поэтому
-     без явного значения кнопки всплывали поверх шапки. */
+  /* Нижняя панель на большом экране неуместна: разделы идут строкой слева
+     под шапкой и уезжают вместе со страницей.
+     У флекс-элементов z-index работает и без позиционирования — без сброса
+     кнопки всплывали поверх шапки. */
   .tabbar {
     order: 2;
-    position: sticky;
-    top: var(--topbar-h, 96px);
-    z-index: 19;
+    position: static;
+    z-index: auto;
     max-width: none;
     margin: 0;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 10px;
-    padding: 0 0 14px;
+    padding: 0 0 20px;
     border-top: 0;
-    background: var(--bg);
+    background: none;
     backdrop-filter: none;
-  }
-  .tabbar::after {
-    content: "";
-    position: absolute; left: 0; right: 0; top: 100%;
-    height: 26px;
-    background: linear-gradient(var(--bg), transparent);
-    pointer-events: none;
   }
   .tabbar button {
     flex: 0 0 auto;
@@ -987,6 +982,8 @@ button.brand:active { opacity: .75; }
     margin-left: auto;
     margin-right: auto;
   }
+  /* «Назад» — шаг из экрана, ему место у левого края, а не в колонке. */
+  .view.narrow > .backlink, .doc > .backlink { margin-left: 0; }
 
   /* Фильтры помещаются целиком — прокручивать нечего. */
   .filters { flex-wrap: wrap; overflow: visible; padding-bottom: 18px; }

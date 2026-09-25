@@ -896,7 +896,6 @@ function render() {
   }
 
   bindInputs();
-  measureTopbar();
   updateBackButton();
   // Прокрутка наверх — только при переходе на другой экран. Перерисовка того же
   // экрана (ошибка под полем, переключатель, фильтр) не должна уводить страницу.
@@ -1360,14 +1359,6 @@ document.addEventListener('pointerdown', (event) => {
   btn.classList.add('rippling');
 });
 
-/* Высота шапки: под неё подставляется липкая строка разделов на ПК. */
-function measureTopbar() {
-  const bar = document.querySelector('.topbar');
-  if (bar) document.documentElement.style.setProperty('--topbar-h', bar.offsetHeight + 'px');
-}
-
-window.addEventListener('resize', measureTopbar);
-
 /* ------------------------------------------------------------------- старт */
 
 /* Вне Telegram (например, в браузере при отладке) telegram-web-app.js
@@ -1400,7 +1391,6 @@ function applyTheme() {
 async function boot() {
   applyTheme();
   applyInsets();
-  measureTopbar();
 
   if (tg) {
     tg.ready();
