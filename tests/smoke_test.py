@@ -29,6 +29,10 @@ os.environ.update(
         "INSTRUCTION_TEMPLATE": "Шаг 1\\nШаг 2",
         "PRICE_RUB": "3000",
         "ORDER_PREFIX": "NP",
+        "LEGAL_NAME": "Самозанятый Тестов Т. Т.",
+        "LEGAL_INN": "123456789012",
+        "CONTACT_EMAIL": "help@example.com",
+        "OFFER_URL": "https://example.com/offer",
         "DEV_MODE": "0",
         "LOG_LEVEL": "WARNING",
     }
@@ -355,6 +359,15 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("bootstrap отдаёт каталог", len(data["catalog"]) == 24)
         check("цена в витрине", data["product"]["priceText"].startswith("3"))
         check("покупатель не продавец", data["user"]["isSeller"] is False)
+
+        about = data["about"]
+        check("в витрине есть реквизиты продавца",
+              about["legalName"].startswith("Самозанятый") and about["inn"] == "123456789012")
+        check("в витрине есть контакты", about["email"] == "help@example.com")
+        docs = {d["key"]: d for d in about["docs"]}
+        check("документы перечислены", set(docs) == {"offer", "privacy", "refund"}, str(list(docs)))
+        check("ссылка на готовый документ", docs["offer"]["url"] == "https://example.com/offer")
+        check("документ без ссылки помечен пустым", docs["privacy"]["url"] == "")
 
         res = await client.get("/api/seller/orders", headers=buyer_headers)
         check("панель продавца закрыта", res.status == 403)

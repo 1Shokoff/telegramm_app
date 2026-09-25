@@ -49,6 +49,10 @@ def start_kb(cfg: Config, has_order: bool) -> InlineKeyboardMarkup:
     return _rows(first, second, third)
 
 
+def help_kb() -> InlineKeyboardMarkup:
+    return _rows([InlineKeyboardButton(text="О нас · документы и реквизиты", callback_data="nav:about")])
+
+
 def confirm_order_kb() -> InlineKeyboardMarkup:
     return _rows(
         [InlineKeyboardButton(text="Оформить заказ", callback_data="nav:buy_confirm")],

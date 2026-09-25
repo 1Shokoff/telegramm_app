@@ -77,7 +77,15 @@ async def cmd_udid(message: Message, cfg: Config) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, cfg: Config) -> None:
-    await message.answer(texts.help_text(cfg.support_username, cfg.webapp_enabled))
+    await message.answer(
+        texts.help_text(cfg.support_username, cfg.webapp_enabled),
+        reply_markup=keyboards.help_kb(),
+    )
+
+
+@router.message(Command("about"))
+async def cmd_about(message: Message, cfg: Config) -> None:
+    await message.answer(texts.about(cfg), disable_web_page_preview=True)
 
 
 async def _notify_screen(user_id: int, cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
@@ -187,7 +195,16 @@ async def nav_catalog(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "nav:help")
 async def nav_help(call: CallbackQuery, cfg: Config) -> None:
-    await call.message.answer(texts.help_text(cfg.support_username, cfg.webapp_enabled))
+    await call.message.answer(
+        texts.help_text(cfg.support_username, cfg.webapp_enabled),
+        reply_markup=keyboards.help_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "nav:about")
+async def nav_about(call: CallbackQuery, cfg: Config) -> None:
+    await call.message.answer(texts.about(cfg), disable_web_page_preview=True)
     await call.answer()
 
 

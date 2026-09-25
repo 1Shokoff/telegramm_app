@@ -168,6 +168,17 @@ async def bootstrap(request: web.Request) -> web.Response:
             "featured": list(catalog.FEATURED),
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
+            "about": {
+                "legalName": cfg.legal_name,
+                "inn": cfg.legal_inn,
+                "address": cfg.legal_address,
+                "email": cfg.contact_email,
+                "phone": cfg.contact_phone,
+                "docs": [
+                    {"key": key, "title": title, "hint": hint, "url": cfg.doc_url(key)}
+                    for key, title, hint in const.DOCUMENTS
+                ],
+            },
             "privacy": texts.PRIVACY,
             "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,
             "order": order_public(order),

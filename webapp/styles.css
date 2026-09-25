@@ -359,6 +359,35 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .tl .s { font-size: 13px; color: var(--muted); }
 .tl.pending .t { color: var(--muted); font-weight: 500; }
 
+/* ------------------------------------------------------------- о нас */
+
+.doc-row {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 13px 2px;
+  border: 0; border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text);
+  font-family: inherit; font-size: 15px; text-align: left;
+}
+.doc-row:last-child { border-bottom: 0; }
+.doc-row:not(.pending) { cursor: pointer; }
+.doc-row:not(.pending):active { opacity: .7; }
+.doc-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.doc-title { font-weight: 600; }
+.doc-hint { color: var(--muted); font-size: 13px; }
+.doc-flag {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.doc-flag.open { border-color: transparent; font-size: 15px; }
+
+.legal { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
 .notice {
   display: flex; gap: 10px; align-items: flex-start;
   background: var(--surface-2);

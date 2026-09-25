@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import const
+
 PAYMENT_MODES = ("manual", "demo", "stars")
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,6 +80,12 @@ class Config:
     payment_details: str
     instruction_template: str
     telegram_proxy: str
+    legal_name: str
+    legal_inn: str
+    legal_address: str
+    contact_email: str
+    contact_phone: str
+    doc_urls: tuple[tuple[str, str], ...]
     order_prefix: str
     db_path: str
     host: str
@@ -99,6 +107,20 @@ class Config:
 
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
+
+    def doc_url(self, key: str) -> str:
+        """Ссылка на документ или пустая строка, пока документ не готов."""
+        return dict(self.doc_urls).get(key, "")
+
+    @property
+    def legal_line(self) -> str:
+        """Строка с реквизитами продавца — она же подвал витрины."""
+        parts = [self.legal_name]
+        if self.legal_inn:
+            parts.append("ИНН " + self.legal_inn)
+        if self.legal_address:
+            parts.append(self.legal_address)
+        return " · ".join(p for p in parts if p)
 
 
 def load_config() -> Config:
@@ -140,6 +162,15 @@ def load_config() -> Config:
         payment_details=_multiline("PAYMENT_DETAILS"),
         instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
         telegram_proxy=proxy,
+        legal_name=_s("LEGAL_NAME"),
+        legal_inn=_s("LEGAL_INN"),
+        legal_address=_s("LEGAL_ADDRESS"),
+        contact_email=_s("CONTACT_EMAIL"),
+        contact_phone=_s("CONTACT_PHONE"),
+        doc_urls=tuple(
+            (key, _s(key.upper() + "_URL"))
+            for key, _title, _hint in const.DOCUMENTS
+        ),
         order_prefix=_s("ORDER_PREFIX", "NP"),
         db_path=_s("DB_PATH", "/data/bot.sqlite3"),
         host=_s("HOST", "0.0.0.0"),

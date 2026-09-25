@@ -23,6 +23,9 @@ os.environ.update(
         "PAYMENT_MODE": "manual",
         "PAYMENT_DETAILS": "СБП: +7 900 000-00-00",
         "PRICE_RUB": "3000",
+        "LEGAL_NAME": "Самозанятый Тестов Т. Т.",
+        "LEGAL_INN": "123456789012",
+        "CONTACT_EMAIL": "help@example.com",
         "LOG_LEVEL": "WARNING",
     }
 )
@@ -180,6 +183,24 @@ async def main() -> int:
     check(
         "картинку не приняли — приветствие уходит текстом",
         any(isinstance(m, SendMessage) and "iApki" in m.text for m in bot.calls),
+    )
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/about"))
+    about = "\n".join(bot.texts_to(BUYER))
+    check("/about показывает реквизиты", "ИНН 123456789012" in about, about[:120])
+    check("/about показывает контакты", "help@example.com" in about)
+    check("/about перечисляет документы", "Оферта" in about and "готовится" in about)
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/help"))
+    check(
+        "из помощи есть переход в «О нас»",
+        any(
+            isinstance(m, SendMessage) and m.reply_markup
+            and any("nav:about" == b.callback_data for row in m.reply_markup.inline_keyboard for b in row)
+            for m in bot.calls
+        ),
     )
 
     bot.reset()

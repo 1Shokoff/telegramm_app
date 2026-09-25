@@ -6,7 +6,6 @@ const state = {
   boot: null,
   view: 'home',
   error: null,
-  showAllApps: false,
   filter: 'Все',
   newOrder: false,
   checkoutApp: null,
@@ -122,7 +121,10 @@ function appCard(app) {
 function viewHome() {
   const b = state.boot;
   const featured = (b.featured || []).map(appBySlug).filter(Boolean);
-  const shown = (b.catalog || []).slice(0, 6);
+  const cats = ['Все'].concat(b.categories || []);
+  const list = state.filter === 'Все'
+    ? b.catalog
+    : b.catalog.filter((a) => a.category === state.filter);
 
   return (
     '<section class="hero">' +
@@ -138,22 +140,9 @@ function viewHome() {
     '</section>' +
     flowline(0) +
     '<div class="section-head">' +
-      '<h2>Нужное каждый день</h2>' +
-      '<button data-action="tab:apps">Все ' + b.product.appsCount + ' →</button>' +
+      '<h2>Каталог</h2>' +
+      '<span class="muted">' + b.product.appsCount + ' приложений</span>' +
     '</div>' +
-    '<div class="grid">' + shown.map(appCard).join('') + '</div>'
-  );
-}
-
-function viewApps() {
-  const b = state.boot;
-  const cats = ['Все'].concat(b.categories || []);
-  const list = state.filter === 'Все'
-    ? b.catalog
-    : b.catalog.filter((a) => a.category === state.filter);
-
-  return (
-    '<h1>Каталог</h1><p class="muted">Все нужные приложения — в одном месте.</p>' +
     '<div class="filters">' + cats.map((c) => (
       '<button class="chip' + (c === state.filter ? ' active' : '') + '" aria-pressed="' + (c === state.filter) + '" data-action="filter:' + esc(c) + '">' + esc(c) + '</button>'
     )).join('') + '</div>' +
@@ -550,8 +539,78 @@ function viewHelp() {
         esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и UDID.' +
       '</div></details>' +
       '<button class="btn btn-secondary" data-action="notify">🔔 Настроить уведомления</button>' +
+      '<button class="btn btn-secondary mt" data-action="tab:about">О нас · документы и реквизиты</button>' +
       support +
     '</div>'
+  );
+}
+
+/* ----------------------------------------------------------------- о нас */
+
+function docRow(doc) {
+  if (!doc.url) {
+    return (
+      '<div class="doc-row pending">' +
+        '<span class="doc-text"><span class="doc-title">' + esc(doc.title) + '</span>' +
+        '<span class="doc-hint">' + esc(doc.hint) + '</span></span>' +
+        '<span class="doc-flag">готовим</span>' +
+      '</div>'
+    );
+  }
+  return (
+    '<button type="button" class="doc-row" data-action="doc:' + esc(doc.key) + '">' +
+      '<span class="doc-text"><span class="doc-title">' + esc(doc.title) + '</span>' +
+      '<span class="doc-hint">' + esc(doc.hint) + '</span></span>' +
+      '<span class="doc-flag open">↗</span>' +
+    '</button>'
+  );
+}
+
+function contactRows(about) {
+  const rows = [];
+  if (about.email) rows.push(['Почта', about.email]);
+  if (about.phone) rows.push(['Телефон', about.phone]);
+  if (state.boot.support) rows.push(['Telegram', '@' + state.boot.support]);
+  if (!rows.length) return '<div class="muted">Появятся здесь до открытия продаж.</div>';
+  return rows.map(([label, value]) => (
+    '<div class="row"><span class="label">' + esc(label) + '</span>' +
+    '<span class="value">' + esc(value) + '</span></div>'
+  )).join('');
+}
+
+function legalLine(about) {
+  const parts = [about.legalName, about.inn ? 'ИНН ' + about.inn : '', about.address];
+  return parts.filter(Boolean).join(' · ');
+}
+
+function viewAbout() {
+  const b = state.boot;
+  const about = b.about || { docs: [] };
+  const legal = legalLine(about);
+
+  return (
+    '<h1>О нас</h1>' +
+    '<p class="muted">Сервис iApki ставит на iPhone приложения, которых нет ' +
+      'в App Store. Оплата, UDID, установка сертификата, инструкция — весь путь ' +
+      'проходит здесь и в чате бота.</p>' +
+    '<div class="card">' +
+      '<div class="row"><span class="label">Каталог</span>' +
+        '<span class="value">' + b.product.appsCount + ' приложений</span></div>' +
+      '<div class="row"><span class="label">Цена</span>' +
+        '<span class="value">' + esc(b.product.priceText) + '</span></div>' +
+    '</div>' +
+    flowline(0) +
+    '<div class="section-head"><h2>Документы</h2></div>' +
+    '<div class="card tight">' + (about.docs || []).map(docRow).join('') + '</div>' +
+    '<div class="section-head"><h2>Контакты</h2></div>' +
+    '<div class="card">' + contactRows(about) + '</div>' +
+    '<div class="section-head"><h2>Реквизиты</h2></div>' +
+    '<div class="card">' +
+      (legal
+        ? '<div class="legal">' + esc(legal) + '</div>'
+        : '<div class="muted">Появятся здесь до открытия продаж.</div>') +
+    '</div>' +
+    '<div class="cta-note mt">' + esc(b.privacy) + '</div>'
   );
 }
 
@@ -665,9 +724,8 @@ async function refreshSellerList() {
 function navIcon(key) {
   const paths = {
     home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
-    apps: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
     order: '<rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 12h6M9 16h4"/>',
-    help: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5M12 17h.01"/>',
+    about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',
     seller: '<rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
   };
   return '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[key] + '</svg>';
@@ -679,15 +737,16 @@ function tabbar() {
   const unread = b.unread || 0;
   const alert = unread > 0 || (order && order.isOpen && (order.status === 'paid' || order.status === 'new'));
   const sellerAlert = (b.sellerUnread || 0) > 0;
+  // Каталог живёт на «Главной», помощь — кнопкой в шапке: нижний ряд
+  // оставляем коротким, чтобы хватало места новым разделам.
   const tabs = [
-    ['home', 'Главная', '⌂'],
-    ['apps', 'Приложения', '▦'],
-    ['order', 'Мой заказ', '✈'],
-    ['help', 'Помощь', '?'],
+    ['home', 'Главная'],
+    ['order', 'Мой заказ'],
+    ['about', 'О нас'],
   ];
-  if (b.user.isSeller) tabs.push(['seller', 'Продавец', '★']);
+  if (b.user.isSeller) tabs.push(['seller', 'Продавец']);
 
-  return tabs.map(([key, label, icon]) => (
+  return tabs.map(([key, label]) => (
     '<button class="' + (state.view === key ? 'on' : '') + '" data-action="tab:' + key + '">' +
     navIcon(key) +
     ((key === 'order' && alert) || (key === 'seller' && sellerAlert)
@@ -717,7 +776,7 @@ function render() {
   if (!state.boot) return;
 
   const views = {
-    home: viewHome, apps: viewApps, order: viewOrder,
+    home: viewHome, order: viewOrder, about: viewAbout,
     help: viewHelp, seller: viewSeller, chat: viewChat, notify: viewNotify,
   };
   document.body.classList.toggle('chat-mode', state.view === 'chat');
@@ -741,11 +800,15 @@ function render() {
   state.screen = key;
 }
 
+const TABS = ['home', 'order', 'about', 'seller'];
+
 function updateBackButton() {
   if (!tg || !tg.BackButton) return;
-  const nested = state.view === 'chat' || state.view === 'notify'
-    || (state.view === 'seller' && state.seller.current);
-  if (nested || (state.view !== 'home' && state.view !== 'order')) tg.BackButton.show();
+  // Разделы нижнего ряда — верхний уровень. Помощь из шапки, переписка,
+  // уведомления и карточка заказа у продавца — вложенные экраны.
+  const nested = TABS.indexOf(state.view) === -1
+    || (state.view === 'seller' && !!state.seller.current);
+  if (nested) tg.BackButton.show();
   else tg.BackButton.hide();
 }
 
@@ -1074,6 +1137,14 @@ function handleAction(raw) {
     return;
   }
   if (kind === 'filter') { state.filter = value; render(); return; }
+  if (kind === 'doc') {
+    const docs = (state.boot.about && state.boot.about.docs) || [];
+    const doc = docs.find((d) => d.key === value);
+    if (!doc || !doc.url) { toast('Документ готовим', true); return; }
+    if (tg && tg.openLink) tg.openLink(doc.url);
+    else window.open(doc.url, '_blank');
+    return;
+  }
   if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from html import escape
 
 from . import catalog, const, udid as udid_mod
+from .config import Config
 
 DONE_MARK = "✅"
 CURRENT_MARK = "🔸"
@@ -181,6 +182,46 @@ def help_text(support_username: str, has_webapp: bool) -> str:
     if support_username:
         lines.append("")
         lines.append("Живой человек: @%s" % e(support_username))
+    return "\n".join(lines)
+
+
+def about(cfg: Config) -> str:
+    """Экран «О нас»: что за сервис, документы, контакты и реквизиты.
+
+    Те же сведения показывает Mini App. Платёжная система проверяет,
+    что покупатель видит их до оплаты, поэтому не готовые пункты
+    показываем честно, а не прячем.
+    """
+    lines = [
+        "<b>О сервисе iApki</b>",
+        "",
+        "Ставим на ваш iPhone приложения, которых нет в App Store: "
+        "%d приложений каталога. Оплата → вы присылаете UDID → мы ставим "
+        "сертификат → вы получаете инструкцию." % catalog.count(),
+        "",
+        "<b>Документы</b>",
+    ]
+    for key, title, _hint in const.DOCUMENTS:
+        url = cfg.doc_url(key)
+        lines.append(
+            '• <a href="%s">%s</a>' % (e(url), e(title)) if url
+            else "• %s — готовится" % e(title)
+        )
+
+    contacts = []
+    if cfg.contact_email:
+        contacts.append("Почта: %s" % e(cfg.contact_email))
+    if cfg.contact_phone:
+        contacts.append("Телефон: %s" % e(cfg.contact_phone))
+    if cfg.support_username:
+        contacts.append("Telegram: @%s" % e(cfg.support_username))
+    lines.append("")
+    lines.append("<b>Контакты</b>")
+    lines.extend(contacts or ["Появятся здесь до открытия продаж."])
+
+    lines.append("")
+    lines.append("<b>Реквизиты</b>")
+    lines.append(e(cfg.legal_line) if cfg.legal_line else "Появятся здесь до открытия продаж.")
     return "\n".join(lines)
 
 

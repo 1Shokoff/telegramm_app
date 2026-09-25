@@ -35,6 +35,7 @@ BUYER_COMMANDS = [
     BotCommand(command="order", description="Мой заказ"),
     BotCommand(command="udid", description="Где найти UDID"),
     BotCommand(command="notify", description="Настройка уведомлений"),
+    BotCommand(command="about", description="О нас, документы и реквизиты"),
     BotCommand(command="help", description="Помощь"),
     BotCommand(command="forget", description="Удалить мои данные"),
 ]
