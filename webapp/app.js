@@ -572,7 +572,11 @@ function viewHelp() {
       '<details class="disclosure"><summary>Что с моими данными?</summary><div class="body">' +
         esc(b.privacy) + '\n\nКоманда /forget в чате бота удаляет заказы и UDID.' +
       '</div></details>' +
-      '<button class="btn btn-secondary" data-action="notify">🔔 Настроить уведомления</button>' +
+      // Уведомления настраиваются только внутри Telegram: в браузере
+      // сервер не знает, чей это аккаунт.
+      (state.public
+        ? ''
+        : '<button class="btn btn-secondary" data-action="notify">🔔 Настроить уведомления</button>') +
       '<button class="btn btn-secondary mt" data-action="tab:about">О нас · документы и реквизиты</button>' +
       support +
     '</div>'
@@ -891,7 +895,14 @@ function render() {
   // Прокрутка наверх — только при переходе на другой экран. Перерисовка того же
   // экрана (ошибка под полем, переключатель, фильтр) не должна уводить страницу.
   const key = screenKey();
-  if (key !== state.screen && state.view !== 'chat') window.scrollTo(0, 0);
+  if (key !== state.screen && state.view !== 'chat') {
+    window.scrollTo(0, 0);
+    // Перезапуск анимации появления: перерисовка того же экрана
+    // (галочка, фильтр) не должна мигать.
+    root.classList.remove('view-in');
+    void root.offsetWidth;
+    root.classList.add('view-in');
+  }
   state.screen = key;
 }
 
@@ -907,7 +918,65 @@ function updateBackButton() {
   else tg.BackButton.hide();
 }
 
+/* Ряды фильтров прокручиваются вбок. На телефоне это делает палец,
+   а на компьютере колесо мыши крутит страницу, и часть ряда недостижима —
+   поэтому колесо над рядом двигаем его сами, плюс даём тащить мышью. */
+function bindScrollX(el) {
+  el.addEventListener('wheel', (event) => {
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    // На краю ряда колесо возвращается странице — иначе прокрутка упирается.
+    if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
+    event.preventDefault();
+    el.scrollBy({ left: delta, behavior: 'auto' });
+  }, { passive: false });
+
+  let startX = 0;
+  let startLeft = 0;
+  let dragging = false;
+  let moved = false;
+
+  el.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'touch' || event.button !== 0) return;
+    dragging = true;
+    moved = false;
+    startX = event.clientX;
+    startLeft = el.scrollLeft;
+  });
+
+  el.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - startX;
+    if (!moved && Math.abs(dx) > 4) {
+      moved = true;
+      el.classList.add('dragging');
+    }
+    if (moved) el.scrollLeft = startLeft - dx;
+  });
+
+  const stop = () => {
+    dragging = false;
+    el.classList.remove('dragging');
+  };
+  el.addEventListener('pointerup', stop);
+  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerleave', stop);
+
+  // После перетаскивания палец (или курсор) стоит на чипе — но это была
+  // прокрутка, а не выбор фильтра.
+  el.addEventListener('click', (event) => {
+    if (!moved) return;
+    moved = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+}
+
 function bindInputs() {
+  document.querySelectorAll('.filters, .stepper').forEach(bindScrollX);
+
   const udid = document.getElementById('udidInput');
   if (udid) {
     udid.addEventListener('input', () => {

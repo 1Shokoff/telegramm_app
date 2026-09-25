@@ -719,7 +719,154 @@ a.brand { text-decoration: none; color: inherit; }
 .switch:checked::after { background: #101407; }
 .card { box-shadow: 0 5px 22px #0000000a; }
 @media (max-width: 350px) { .hero { padding: 18px; } .cluster { gap: 6px; } .cluster .app-icon { width: 36px; height: 36px; } .app-card { padding: 12px; } .brand-sub { font-size: 11px; } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
+
+/* --------------------------------------------------------------- движение */
+
+/* Появление экрана: класс навешивает render() только при смене экрана. */
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.view.view-in { animation: view-in .26s cubic-bezier(.2, .7, .3, 1); }
+
+/* Нажатие: салатовая вспышка от центра кнопки. */
+.btn { position: relative; overflow: hidden; isolation: isolate; }
+.btn::after {
+  content: "";
+  position: absolute; inset: 0; z-index: -1;
+  background: radial-gradient(circle at 50% 50%, #c8ff3159, transparent 65%);
+  opacity: 0;
+  transform: scale(.4);
+  transition: opacity .45s ease, transform .45s ease;
+}
+.btn:active::after { opacity: 1; transform: scale(1); transition-duration: .08s; }
+.btn-primary:active { box-shadow: 0 0 0 5px #c8ff312e, 0 6px 26px #c8ff3140; }
+
+.chip, .doc-row, .app-card, .order-line, .icon-btn, .tabbar button {
+  transition: background .2s ease, border-color .2s ease, color .2s ease,
+              transform .16s ease, box-shadow .25s ease;
+}
+.chip:active, .doc-row:not(.pending):active, .order-line:active { transform: scale(.97); }
+.app-card:active { transform: scale(.985); }
+.icon-btn:active, .tabbar button:active { transform: scale(.92); }
+
+/* Активный фильтр — градиентом, а не заливкой. */
+.filters .chip.active {
+  background: linear-gradient(135deg, var(--accent), #c8ff31b0);
+  box-shadow: 0 4px 16px #c8ff3126;
+}
+
+/* Курсор мыши: на телефоне эти правила не включаются. */
+@media (hover: hover) and (pointer: fine) {
+  .app-card:hover {
+    transform: translateY(-3px);
+    border-color: #c8ff3166;
+    box-shadow: 0 12px 30px #c8ff310f;
+  }
+  .chip:hover:not(.active) { border-color: #c8ff3166; color: var(--text); }
+  .doc-row:not(.pending):hover .doc-title, .order-line:hover .code { color: var(--accent); }
+  .icon-btn:hover { background: var(--surface-2); box-shadow: 0 0 0 1px #c8ff3140; }
+  .btn-secondary:hover, .btn-danger:hover { border-color: #c8ff3166; }
+  /* Блик по салатовой кнопке. */
+  .btn-primary {
+    background-image: linear-gradient(110deg, transparent 35%, #ffffff5c 48%, transparent 62%);
+    background-size: 260% 100%;
+    background-position: 130% 0;
+    transition: background-position .7s ease, box-shadow .25s ease, transform .16s ease;
+  }
+  .btn-primary:hover { background-position: -30% 0; }
+  .footer-links a:hover, .footer-links .linkish:hover { color: var(--accent); border-bottom-color: #c8ff3166; }
+}
+
+/* Ряды фильтров тянутся мышью — курсор показывает, что их можно двигать. */
+@media (hover: hover) and (pointer: fine) {
+  .filters, .stepper { cursor: grab; }
+}
+.filters.dragging, .stepper.dragging { cursor: grabbing; user-select: none; }
+.filters.dragging .chip { pointer-events: none; }
+
+/* ------------------------------------------------------- версия для ПК */
+
+@media (min-width: 900px) {
+  .shell { max-width: 1120px; padding: 0 32px; }
+  .topbar { padding: 26px 0 14px; }
+  .brand-title { font-size: 26px; }
+  .brand-sub { font-size: 13px; }
+
+  /* Нижняя панель на большом экране неуместна: поднимаем её под шапку. */
+  .topbar { order: 1; }
+  .tabbar { order: 2; }
+  .view { order: 3; padding-bottom: 48px; }
+  /* На страницах документов подвал — прямой потомок .shell: без явного
+     порядка он оказался бы выше шапки. */
+  .shell > .footer { order: 4; }
+  .tabbar {
+    position: static;
+    max-width: none;
+    margin: 0;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 0 0 22px;
+    border-top: 0;
+    background: none;
+    backdrop-filter: none;
+  }
+  .tabbar button {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 9px;
+    min-height: 0;
+    font-size: 14px;
+    padding: 11px 18px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .tabbar button.on {
+    background: linear-gradient(135deg, #c8ff3126, #c8ff3108);
+    border-color: #c8ff3166;
+  }
+  .tabbar .dot-badge { position: static; margin: 0; }
+
+  /* Витрина шире, поэтому шапка блока — в две колонки. */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 330px);
+    column-gap: 40px;
+    padding: 44px;
+  }
+  .hero > .hero-head { grid-area: 1 / 1; max-width: 460px; }
+  .hero > h1 { grid-area: 2 / 1; font-size: 46px; }
+  .hero > p { grid-area: 3 / 1; max-width: 460px; font-size: 15px; }
+  .hero > .cluster { grid-area: 1 / 2 / 6 / 3; align-self: center; margin: 0; justify-content: center; }
+  .hero > .cluster .app-icon { width: 64px; height: 64px; border-radius: 19px; }
+  .hero > .btn-primary { grid-area: 4 / 1; max-width: 380px; }
+  .hero > .cta-note { grid-area: 5 / 1; text-align: left; max-width: 380px; }
+
+  .flowline { justify-content: flex-start; font-size: 13px; gap: 8px; }
+  .section-head h2 { font-size: 24px; }
+
+  /* Каталог заполняет ширину: по четыре карточки в ряд. */
+  .grid { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 16px; }
+  .app-card { min-height: 196px; }
+  .app-card .name { font-size: 16px; }
+  .app-card .desc { font-size: 12px; -webkit-line-clamp: 2; }
+  .app-card .price { font-size: 14px; }
+
+  /* Текст читается плохо, если строка во всю ширину монитора. */
+  .card, .doc, .notice, .field, .stepper, .timeline, .chat-list, .composer,
+  .view > h1, .view > p, .view > .muted, .view > .btn, .view > .cta-note,
+  .view > .backlink, .view > .search, .view > .pill, .view > .mt { max-width: 860px; }
+  .doc { max-width: 760px; }
+
+  /* Фильтры помещаются целиком — прокручивать нечего. */
+  .filters { flex-wrap: wrap; overflow: visible; padding-bottom: 18px; }
+  .app-card .arrow { display: block; }
+  .footer { max-width: none; }
+  .footer-links { gap: 8px 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
 /* Экран загрузки со знаком iApki */
 .loader { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 18vh; }

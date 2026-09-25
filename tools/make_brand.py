@@ -32,7 +32,7 @@ def mark_only(path_data: str) -> str:
     return " ".join(part.strip() for part in kept)
 
 
-def crop(svg: str, side: float, title: str) -> str:
+def crop(svg: str, side: float, title: str, radius: float = 0) -> str:
     cx, cy = ICON_CENTER
     x, y = cx - side / 2, cy - side / 2
     svg = re.sub(
@@ -44,9 +44,13 @@ def crop(svg: str, side: float, title: str) -> str:
     )
     svg = re.sub(r"<title>.*?</title>", "<title>%s</title>" % title, svg, count=1)
     # Фон растягиваем на всю рамку, чтобы у обрезки не было прозрачных краёв.
+    # radius — скругление салатовой подложки: у иконки вкладки браузера
+    # квадратные углы выглядят чужеродно, у аватара их скрывает круглая обрезка.
+    corner = ' rx="%g"' % radius if radius else ""
     svg = re.sub(
         r'<rect[^>]*fill="#CBFA2D"\s*/>',
-        '<rect x="%g" y="%g" width="%g" height="%g" fill="#CBFA2D"/>' % (x, y, side, side),
+        '<rect x="%g" y="%g" width="%g" height="%g"%s fill="#CBFA2D"/>'
+        % (x, y, side, side, corner),
         svg,
         count=1,
     )
@@ -62,8 +66,9 @@ def main() -> None:
         source = fh.read()
 
     outputs = {
-        # Поля ~2,5%: как у brand.png, углы квадрата чуть видны салатовым.
-        "icon.svg": crop(source, ICON_SIDE * 1.05, "iApki"),
+        # Поля ~2,5%: как у brand.png, салатовая подложка повторяет
+        # скругление самого знака — иначе во вкладке браузера торчат углы.
+        "icon.svg": crop(source, ICON_SIDE * 1.05, "iApki", radius=ICON_SIDE * 0.27),
         # Поля под круглую обрезку: квадрат со скруглением вписывается в круг.
         "avatar.svg": crop(source, ICON_SIDE * 1.42, "iApki — аватар бота"),
     }
