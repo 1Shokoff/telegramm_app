@@ -346,6 +346,10 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 /* Если в webapp/icons/<slug>.png нет файла, картинка удаляется и остаётся буква. */
 .app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 
+/* Длинные слова без пробелов (ссылка, UDID, вставленный текст) не должны
+   растягивать карточку вбок. */
+.body, .notice, .row .value, .doc p, .doc li { overflow-wrap: anywhere; }
+
 .body { color: var(--muted); font-size: 14px; }
 
 .filters { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 14px; scrollbar-width: none; }
@@ -448,6 +452,9 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 pre.instruction {
   white-space: pre-wrap;
+  /* Инструкция может прийти одним длинным словом — без переноса она
+     растягивала карточку и всю страницу вбок. */
+  overflow-wrap: anywhere;
   font-family: inherit;
   font-size: 15px;
   margin: 0;
@@ -586,7 +593,7 @@ textarea {
   border-color: transparent;
   border-radius: 16px 16px 4px 16px;
 }
-.msg-text { font-size: 15px; white-space: pre-wrap; word-break: break-word; }
+.msg-text { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg-time { font-size: 11px; opacity: .55; margin-top: 4px; text-align: right; }
 
 .composer {
@@ -987,6 +994,15 @@ button.brand:active { opacity: .75; }
     margin-left: auto;
     margin-right: auto;
   }
+  /* Строчные элементы (плашка статуса, кнопка-ссылка) автополями не
+     выравниваются — сдвигаем их к левой границе той же колонки. */
+  .view.narrow > .pill, .view.narrow > .linkish {
+    display: flex;
+    width: fit-content;
+    margin-left: max(0px, calc((100% - 880px) / 2));
+    margin-right: auto;
+  }
+
   /* «Назад» — шаг из экрана, ему место у левого края, а не в колонке. */
   .view.narrow > .backlink, .doc > .backlink { margin-left: 0; }
 
