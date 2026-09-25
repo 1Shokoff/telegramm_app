@@ -120,9 +120,11 @@ function flowline(step) {
   )).join('<span class="sep">→</span>') + '</div>';
 }
 
-function appCard(app) {
+function appCard(app, index) {
+  // --i задаёт задержку появления: карточки выкладываются волной.
   return (
-    '<button type="button" class="app-card" data-action="pick-app:' + esc(app.slug) + '" ' +
+    '<button type="button" class="app-card" style="--i:' + (index || 0) + '" ' +
+      'data-action="pick-app:' + esc(app.slug) + '" ' +
       'aria-label="' + esc(app.name) + ' — оформить">' +
     '<span class="arrow">↗</span>' +
     iconHtml(app) +
@@ -877,6 +879,9 @@ function render() {
     help: viewHelp, seller: viewSeller, chat: viewChat, notify: viewNotify,
   };
   document.body.classList.toggle('chat-mode', state.view === 'chat');
+  // На витрине каталог занимает всю ширину, остальные экраны — колонка
+  // по центру: на мониторе текст во всю ширину не читается.
+  root.classList.toggle('narrow', state.view !== 'home');
   // Подвал с реквизитами и документами обязателен на каждом экране,
   // кроме переписки — там снизу поле ввода.
   root.innerHTML = (views[state.view] || viewHome)() + (state.view === 'chat' ? '' : footerHtml());
@@ -891,6 +896,7 @@ function render() {
   }
 
   bindInputs();
+  measureTopbar();
   updateBackButton();
   // Прокрутка наверх — только при переходе на другой экран. Перерисовка того же
   // экрана (ошибка под полем, переключатель, фильтр) не должна уводить страницу.
@@ -1342,6 +1348,26 @@ document.addEventListener('click', (event) => {
   handleAction(target.getAttribute('data-action'));
 });
 
+/* Волна от точки нажатия: координаты знает только сам обработчик. */
+document.addEventListener('pointerdown', (event) => {
+  const btn = event.target.closest('.btn');
+  if (!btn || btn.disabled) return;
+  const box = btn.getBoundingClientRect();
+  btn.style.setProperty('--x', (event.clientX - box.left) + 'px');
+  btn.style.setProperty('--y', (event.clientY - box.top) + 'px');
+  btn.classList.remove('rippling');
+  void btn.offsetWidth;
+  btn.classList.add('rippling');
+});
+
+/* Высота шапки: под неё подставляется липкая строка разделов на ПК. */
+function measureTopbar() {
+  const bar = document.querySelector('.topbar');
+  if (bar) document.documentElement.style.setProperty('--topbar-h', bar.offsetHeight + 'px');
+}
+
+window.addEventListener('resize', measureTopbar);
+
 /* ------------------------------------------------------------------- старт */
 
 /* Вне Telegram (например, в браузере при отладке) telegram-web-app.js
@@ -1374,6 +1400,7 @@ function applyTheme() {
 async function boot() {
   applyTheme();
   applyInsets();
+  measureTopbar();
 
   if (tg) {
     tg.ready();
