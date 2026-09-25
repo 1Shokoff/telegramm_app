@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import auth, catalog, const, db, texts, udid as udid_mod
+from . import auth, catalog, const, db, legal, pages, texts, udid as udid_mod
 from .config import Config
 from .service import OrderService, ServiceError
 
@@ -13,6 +13,43 @@ log = logging.getLogger(__name__)
 routes = web.RouteTableDef()
 
 WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp"
+
+
+def asset_version() -> str:
+    """Метка версии для ссылок на app.js и styles.css.
+
+    Без неё Telegram на телефоне может показать файлы из своего кэша —
+    после выкатки покупатель увидит старый экран.
+    """
+    newest = 0.0
+    for name in ("app.js", "styles.css", "index.html"):
+        path = WEBAPP_DIR / name
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+    return "%x" % int(newest)
+
+
+def about_block(cfg: Config) -> dict:
+    """Реквизиты, контакты и документы — их показывают витрина и подвал."""
+    return {
+        "legalName": cfg.legal_name,
+        "inn": cfg.legal_inn,
+        "address": cfg.legal_address,
+        "email": cfg.contact_email,
+        "phone": cfg.contact_phone,
+        "legalLine": cfg.legal_line,
+        "docs": [
+            {"key": key, "title": title, "hint": hint, "url": cfg.doc_path(key)}
+            for key, title, hint in const.DOCUMENTS
+        ],
+    }
+
+
+def bot_url(request: web.Request) -> str:
+    """Ссылка на бота для гостя, который открыл витрину в браузере."""
+    cfg = cfg_of(request)
+    username = request.app.get("bot_username") or cfg.bot_username
+    return ("https://t.me/%s" % username) if username else ""
 
 
 def cfg_of(request: web.Request) -> Config:
@@ -168,17 +205,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "featured": list(catalog.FEATURED),
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
-            "about": {
-                "legalName": cfg.legal_name,
-                "inn": cfg.legal_inn,
-                "address": cfg.legal_address,
-                "email": cfg.contact_email,
-                "phone": cfg.contact_phone,
-                "docs": [
-                    {"key": key, "title": title, "hint": hint, "url": cfg.doc_url(key)}
-                    for key, title, hint in const.DOCUMENTS
-                ],
-            },
+            "about": about_block(cfg),
             "privacy": texts.PRIVACY,
             "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,
             "order": order_public(order),
@@ -190,6 +217,53 @@ async def bootstrap(request: web.Request) -> web.Response:
             ),
         }
     )
+
+
+@routes.get("/api/public")
+async def public_bootstrap(request: web.Request) -> web.Response:
+    """Витрина для гостя без Telegram: каталог, цены, документы, реквизиты.
+
+    Без этого модерация платёжной системы не может открыть магазин —
+    Mini App пускает только по подписи initData.
+    """
+    cfg = cfg_of(request)
+    return web.json_response(
+        {
+            "public": True,
+            "user": {"isSeller": False},
+            "order": None,
+            "product": {
+                "title": cfg.product_title,
+                "subtitle": cfg.product_subtitle,
+                "price": cfg.price_rub,
+                "priceText": texts.money(cfg.price_rub),
+                "appsCount": catalog.count(),
+            },
+            "payment": {"mode": cfg.payment_mode, "details": "", "stars": cfg.price_stars},
+            "catalog": [
+                dict(item, priceText=texts.money(item["price"]))
+                for item in catalog.public_catalog(cfg.price_rub)
+            ],
+            "categories": list(catalog.CATEGORIES),
+            "featured": list(catalog.FEATURED),
+            "steps": list(const.STEP_NAMES),
+            "support": cfg.support_username,
+            "about": about_block(cfg),
+            "privacy": texts.PRIVACY,
+            "botUrl": bot_url(request),
+        }
+    )
+
+
+@routes.get("/api/doc/{key}")
+async def api_doc(request: web.Request) -> web.Response:
+    """Текст документа для витрины — открывается внутри приложения."""
+    key = request.match_info["key"]
+    found = legal.document(key, cfg_of(request))
+    if not found:
+        raise ApiError("Документ не найден", status=404)
+    title, html = found
+    return web.json_response({"key": key, "title": title, "html": html})
 
 
 @routes.get("/api/order")
@@ -462,8 +536,32 @@ async def seller_action(request: web.Request) -> web.Response:
 
 
 @routes.get("/")
-async def index(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(WEBAPP_DIR / "index.html")
+async def index(request: web.Request) -> web.Response:
+    # Страницу не кэшируем, а ссылки внутри неё помечаем версией: иначе
+    # клиент Telegram может месяцами показывать старую витрину.
+    html = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
+    return web.Response(
+        text=html.replace("__V__", asset_version()),
+        content_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@routes.get("/docs")
+async def docs_index(request: web.Request) -> web.Response:
+    return web.Response(
+        text=pages.documents_page(cfg_of(request), asset_version()),
+        content_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@routes.get("/docs/{key}")
+async def docs_page(request: web.Request) -> web.Response:
+    html = pages.document_page(request.match_info["key"], cfg_of(request), asset_version())
+    if html is None:
+        raise web.HTTPNotFound(text="Документ не найден", content_type="text/plain")
+    return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @web.middleware

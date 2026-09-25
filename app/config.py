@@ -80,6 +80,7 @@ class Config:
     payment_details: str
     instruction_template: str
     telegram_proxy: str
+    bot_username: str
     legal_name: str
     legal_inn: str
     legal_address: str
@@ -108,9 +109,21 @@ class Config:
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
 
+    def doc_path(self, key: str) -> str:
+        """Адрес документа внутри витрины: свой текст или ссылка из .env."""
+        override = dict(self.doc_urls).get(key, "")
+        if override:
+            return override
+        if (ROOT / "webapp" / "legal" / ("%s.txt" % key)).is_file():
+            return "/docs/" + key
+        return ""
+
     def doc_url(self, key: str) -> str:
-        """Ссылка на документ или пустая строка, пока документ не готов."""
-        return dict(self.doc_urls).get(key, "")
+        """Та же ссылка, но абсолютная — для сообщений бота."""
+        path = self.doc_path(key)
+        if not path or path.startswith("http"):
+            return path
+        return (self.webapp_url + path) if self.webapp_enabled else ""
 
     @property
     def legal_line(self) -> str:
@@ -162,6 +175,7 @@ def load_config() -> Config:
         payment_details=_multiline("PAYMENT_DETAILS"),
         instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
         telegram_proxy=proxy,
+        bot_username=_s("BOT_USERNAME").lstrip("@"),
         legal_name=_s("LEGAL_NAME"),
         legal_inn=_s("LEGAL_INN"),
         legal_address=_s("LEGAL_ADDRESS"),

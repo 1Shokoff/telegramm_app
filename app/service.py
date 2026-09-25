@@ -121,6 +121,14 @@ class OrderService:
             prefix=self.cfg.order_prefix,
             app_slug=app_slug,
         )
+        # Согласие с офертой и обработкой данных фиксируем вместе с заказом:
+        # так обещано в самих документах, и это пригодится при споре.
+        await db.add_event(
+            order["id"],
+            "user:%d" % user_id,
+            "consent",
+            "оферта, политика и согласие на обработку данных",
+        )
         await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>", const.NOTIFY_NEW_ORDER)
         return order, True
 

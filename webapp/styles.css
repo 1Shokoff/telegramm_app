@@ -59,10 +59,11 @@ body { overscroll-behavior-y: none; }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 0 10px;
+  /* --tg-top — место под кнопки Telegram: на телефоне они рисуются поверх шапки. */
+  padding: calc(14px + var(--tg-top, 0px)) 0 10px;
   position: sticky;
   top: 0;
-  background: linear-gradient(var(--bg) 70%, transparent);
+  background: var(--bg);
   z-index: 20;
 }
 
@@ -78,8 +79,9 @@ body { overscroll-behavior-y: none; }
 }
 
 .brand-text { min-width: 0; }
-.brand-title { font-weight: 640; font-size: 16px; letter-spacing: -0.2px; }
-.brand-sub { color: var(--muted); font-size: 13px; }
+/* Блоками, а не строками: иначе на широком экране подпись липнет к названию. */
+.brand-title { display: block; font-weight: 640; font-size: 16px; letter-spacing: -0.2px; }
+.brand-sub { display: block; color: var(--muted); font-size: 13px; }
 
 .icon-btn {
   width: 38px; height: 38px;
@@ -317,6 +319,14 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .app-card .app-icon { margin-bottom: 10px; }
 .app-card .name { font-size: 14px; font-weight: 600; letter-spacing: -0.2px; }
 .app-card .cat { font-size: 12px; color: var(--muted); }
+/* Описание услуги обязано быть видно покупателю, но карточку раздувать нельзя. */
+.app-card .desc {
+  font-size: 11px; line-height: 1.35; color: var(--muted);
+  margin-top: 4px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.app-card .price { font-size: 12px; font-weight: 700; margin-top: 8px; }
 .app-card .arrow { position: absolute; top: 12px; right: 12px; color: var(--muted); font-size: 13px; }
 
 .app-icon {
@@ -387,6 +397,39 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .doc-flag.open { border-color: transparent; font-size: 15px; }
 
 .legal { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+.product-desc { color: var(--muted); font-size: 14px; line-height: 1.5; padding-bottom: 12px; }
+
+/* --------------------------------------------------------------- подвал */
+
+/* Реквизиты и документы — на каждом экране витрины и на каждой странице. */
+.footer {
+  margin-top: 28px;
+  padding: 18px 0 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.footer-links {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  margin-bottom: 10px;
+}
+.footer-links a, .footer-links .linkish {
+  color: var(--text); font-size: 12px; padding: 2px 0;
+  text-decoration: none; border-bottom: 1px solid var(--line);
+}
+.footer-links a:active, .footer-links .linkish:active { opacity: .6; }
+.footer-line { margin-top: 2px; }
+.footer-line.legal { font-size: 12px; }
+
+/* ------------------------------------------------------- документ целиком */
+
+.doc h1 { font-size: 24px; margin-bottom: 16px; }
+.doc h2 { font-size: 17px; margin: 22px 0 8px; }
+.doc p { font-size: 15px; line-height: 1.6; color: var(--text); }
+.doc ul { margin: 0 0 12px; padding-left: 20px; }
+.doc li { font-size: 15px; line-height: 1.6; margin-bottom: 6px; }
 
 .notice {
   display: flex; gap: 10px; align-items: flex-start;
@@ -634,7 +677,8 @@ body.chat-mode .view { padding-bottom: 110px; }
 :root { --brand: #c8ff31; --radius-l: 26px; --radius-m: 18px; }
 :root[data-theme="light"] { --line: #dce2d2; --surface-2: #edf1e6; --surface-3: #e5ebdb; --muted: #606955; }
 body { background-image: radial-gradient(ellipse at 85% 0%, #c8ff310c, transparent 460px); }
-.topbar { padding: 18px 0; gap: 10px; }
+.topbar { padding: calc(18px + var(--tg-top, 0px)) 0 18px; gap: 10px; }
+a.brand { text-decoration: none; color: inherit; }
 .brand-icon { width: 44px; height: 44px; flex-basis: 44px; border-radius: 14px; overflow: hidden; background: var(--brand); }
 .brand-icon img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .brand-title { font-size: 23px; font-weight: 800; letter-spacing: -1px; }

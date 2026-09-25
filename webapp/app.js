@@ -6,6 +6,9 @@ const state = {
   boot: null,
   view: 'home',
   error: null,
+  // Витрину можно открыть и без Telegram — тогда работает только просмотр.
+  public: false,
+  doc: { key: '', title: '', html: '', from: 'about' },
   filter: 'Все',
   newOrder: false,
   checkoutApp: null,
@@ -70,6 +73,17 @@ async function api(path, options) {
   return data;
 }
 
+function appsCount(n) {
+  const tail = n % 100;
+  const last = n % 10;
+  let word = 'приложений';
+  if (tail < 11 || tail > 14) {
+    if (last === 1) word = 'приложение';
+    else if (last >= 2 && last <= 4) word = 'приложения';
+  }
+  return n + ' ' + word;
+}
+
 function appBySlug(slug) {
   return (state.boot.catalog || []).find((a) => a.slug === slug);
 }
@@ -114,6 +128,8 @@ function appCard(app) {
     iconHtml(app) +
     '<span class="name">' + esc(app.name) + '</span>' +
     '<span class="cat">' + esc(app.category) + '</span>' +
+    (app.desc ? '<span class="desc">' + esc(app.desc) + '</span>' : '') +
+    '<span class="price">' + esc(app.priceText) + '</span>' +
     '</button>'
   );
 }
@@ -141,14 +157,17 @@ function viewHome() {
     flowline(0) +
     '<div class="section-head">' +
       '<h2>Каталог</h2>' +
-      '<span class="muted">' + b.product.appsCount + ' приложений</span>' +
+      '<span class="muted">' + appsCount(b.product.appsCount) + '</span>' +
     '</div>' +
     '<div class="filters">' + cats.map((c) => (
       '<button class="chip' + (c === state.filter ? ' active' : '') + '" aria-pressed="' + (c === state.filter) + '" data-action="filter:' + esc(c) + '">' + esc(c) + '</button>'
     )).join('') + '</div>' +
     '<div class="grid">' + list.map(appCard).join('') + '</div>' +
-    '<div class="cta-note mt">Состав услуги и совместимость подтвердим до открытия продаж.</div>' +
-    '<div class="mt"><button class="btn btn-primary" data-action="buy-catalog">Весь каталог · ' + esc(b.product.priceText) + '</button></div>'
+    '<div class="cta-note mt">Цена не зависит от числа приложений: ' +
+      esc(b.product.priceText) + ' — это установка на одно устройство, ' +
+      'хоть одного приложения, хоть всего каталога.</div>' +
+    '<div class="mt"><button class="btn btn-primary" data-action="buy-catalog">' +
+      (state.public ? 'Оформить в Telegram' : 'Весь каталог · ' + esc(b.product.priceText)) + '</button></div>'
   );
 }
 
@@ -172,20 +191,26 @@ function viewCheckout() {
       '<div class="product">' +
         (app ? iconHtml(app) : '<span class="app-icon" style="background:var(--surface-3)"><span>📱</span></span>') +
         '<div><div class="name">' + esc(app ? app.name : 'Весь каталог') + '</div>' +
-        '<div class="sub">' + esc(app ? app.category : 'Все ' + b.product.appsCount + ' приложений') +
+        '<div class="sub">' + esc(app ? app.category : 'Все ' + appsCount(b.product.appsCount)) +
         ' · UDID укажете следующим шагом</div></div>' +
       '</div>' +
+      (app && app.desc ? '<div class="product-desc">' + esc(app.desc) + '</div>' : '') +
       '<div class="row"><span class="label">Цена</span><span class="value">' + esc(price) + '</span></div>' +
       '<div class="row"><span class="label">Оплата</span><span class="value">' + esc(modeText) + '</span></div>' +
       (b.payment.mode === 'stars'
         ? '<div class="row"><span class="label">Сумма в Stars</span><span class="value">' + (b.payment.stars || '—') + '</span></div>'
         : '') +
-      '<details class="disclosure"><summary>Условия заказа</summary>' +
-        '<div class="body">После оплаты укажите UDID устройства. Продавец выполнит установку сертификата и подготовит инструкцию.\n\n' +
-        esc(b.privacy) + '</div>' +
+      '<details class="disclosure"><summary>Что входит в услугу</summary>' +
+        '<div class="body">Мы ставим на ваш iPhone выбранные приложения и профиль подписи, ' +
+        'без которого они не запустятся. В цену входит установка любых приложений каталога ' +
+        'на одно устройство.\n\n' +
+        'Порядок: оплата → вы присылаете UDID устройства → мы выполняем установку → ' +
+        'вы получаете инструкцию в чате бота. Срок — как правило, в течение рабочего дня ' +
+        'после получения UDID.\n\n' + esc(b.privacy) + '</div>' +
       '</details>' +
       '<label class="check"><input type="checkbox" id="agreeTerms"' + (state.agreeTerms ? ' checked' : '') + '>' +
-        '<span>Ознакомился с условиями и понимаю порядок работы.</span></label>' +
+        '<span>Соглашаюсь с условиями и даю согласие на обработку данных.</span></label>' +
+      docLinksHtml() +
       '<button class="btn btn-primary" id="buyBtn" data-action="buy"' + (state.agreeTerms ? '' : ' disabled') + '>' +
         'Оформить заказ и перейти к оплате</button>' +
     '</div>' +
@@ -431,7 +456,16 @@ function openChat(orderId, title, from) {
   });
 }
 
+function openBot() {
+  const url = state.boot && state.boot.botUrl;
+  if (!url) { toast('Откройте бота iApki в Telegram', true); return; }
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url, '_blank');
+}
+
 function startCheckout(slug) {
+  // В браузере заказ не оформить: покупка идёт через бота.
+  if (state.public) { openBot(); return; }
   const order = state.boot.order;
   // Оплаченный заказ в работе не перенастраиваем — сначала его нужно довести.
   if (order && order.isOpen && order.status !== 'new') {
@@ -547,6 +581,72 @@ function viewHelp() {
 
 /* ----------------------------------------------------------------- о нас */
 
+function docs() {
+  return (state.boot && state.boot.about && state.boot.about.docs) || [];
+}
+
+function docLinksHtml() {
+  const ready = docs().filter((d) => d.url);
+  if (!ready.length) return '';
+  return (
+    '<div class="cta-note">' + ready.map((d) => (
+      '<button class="linkish" data-action="doc:' + esc(d.key) + '">' + esc(d.title) + '</button>'
+    )).join(' · ') + '</div>'
+  );
+}
+
+function footerHtml() {
+  const about = (state.boot && state.boot.about) || {};
+  const links = ['<button class="linkish" data-action="tab:about">О нас</button>'];
+  docs().forEach((d) => {
+    if (d.url) links.push('<button class="linkish" data-action="doc:' + esc(d.key) + '">' + esc(d.title) + '</button>');
+  });
+
+  const contacts = [];
+  if (about.email) contacts.push(esc(about.email));
+  if (about.phone) contacts.push(esc(about.phone));
+  if (state.boot && state.boot.support) contacts.push('@' + esc(state.boot.support));
+
+  return (
+    '<footer class="footer">' +
+      '<div class="footer-links">' + links.join('') + '</div>' +
+      (contacts.length ? '<div class="footer-line">' + contacts.join(' · ') + '</div>' : '') +
+      '<div class="footer-line legal">' +
+        (about.legalLine ? esc(about.legalLine) : 'Реквизиты продавца появятся здесь до открытия продаж.') +
+      '</div>' +
+    '</footer>'
+  );
+}
+
+function viewDoc() {
+  const d = state.doc;
+  return (
+    '<button class="backlink" data-action="doc-back">← Назад</button>' +
+    '<div class="doc">' + (d.html ? d.html : '<div class="muted">Загружаем документ…</div>') + '</div>'
+  );
+}
+
+function openDoc(key) {
+  const doc = docs().find((d) => d.key === key);
+  if (!doc || !doc.url) { toast('Документ готовим', true); return; }
+  // Чужую ссылку из .env открываем снаружи, свой документ — прямо здесь.
+  if (/^https?:/i.test(doc.url)) {
+    if (tg && tg.openLink) tg.openLink(doc.url);
+    else window.open(doc.url, '_blank');
+    return;
+  }
+  state.doc = { key, title: doc.title, html: '', from: state.view === 'doc' ? state.doc.from : state.view };
+  state.view = 'doc';
+  render();
+  guard(async () => {
+    const data = await api('/api/doc/' + encodeURIComponent(key));
+    if (state.view === 'doc' && state.doc.key === key) {
+      state.doc.html = data.html;
+      render();
+    }
+  });
+}
+
 function docRow(doc) {
   if (!doc.url) {
     return (
@@ -578,15 +678,10 @@ function contactRows(about) {
   )).join('');
 }
 
-function legalLine(about) {
-  const parts = [about.legalName, about.inn ? 'ИНН ' + about.inn : '', about.address];
-  return parts.filter(Boolean).join(' · ');
-}
-
 function viewAbout() {
   const b = state.boot;
   const about = b.about || { docs: [] };
-  const legal = legalLine(about);
+  const legal = about.legalLine || '';
 
   return (
     '<h1>О нас</h1>' +
@@ -595,7 +690,7 @@ function viewAbout() {
       'проходит здесь и в чате бота.</p>' +
     '<div class="card">' +
       '<div class="row"><span class="label">Каталог</span>' +
-        '<span class="value">' + b.product.appsCount + ' приложений</span></div>' +
+        '<span class="value">' + appsCount(b.product.appsCount) + '</span></div>' +
       '<div class="row"><span class="label">Цена</span>' +
         '<span class="value">' + esc(b.product.priceText) + '</span></div>' +
     '</div>' +
@@ -739,11 +834,9 @@ function tabbar() {
   const sellerAlert = (b.sellerUnread || 0) > 0;
   // Каталог живёт на «Главной», помощь — кнопкой в шапке: нижний ряд
   // оставляем коротким, чтобы хватало места новым разделам.
-  const tabs = [
-    ['home', 'Главная'],
-    ['order', 'Мой заказ'],
-    ['about', 'О нас'],
-  ];
+  const tabs = state.public
+    ? [['home', 'Главная'], ['about', 'О нас']]
+    : [['home', 'Главная'], ['order', 'Мой заказ'], ['about', 'О нас']];
   if (b.user.isSeller) tabs.push(['seller', 'Продавец']);
 
   return tabs.map(([key, label]) => (
@@ -776,11 +869,13 @@ function render() {
   if (!state.boot) return;
 
   const views = {
-    home: viewHome, order: viewOrder, about: viewAbout,
+    home: viewHome, order: viewOrder, about: viewAbout, doc: viewDoc,
     help: viewHelp, seller: viewSeller, chat: viewChat, notify: viewNotify,
   };
   document.body.classList.toggle('chat-mode', state.view === 'chat');
-  root.innerHTML = (views[state.view] || viewHome)();
+  // Подвал с реквизитами и документами обязателен на каждом экране,
+  // кроме переписки — там снизу поле ввода.
+  root.innerHTML = (views[state.view] || viewHome)() + (state.view === 'chat' ? '' : footerHtml());
   document.getElementById('tabbar').innerHTML = tabbar();
 
   const sub = document.getElementById('brandSub');
@@ -1061,6 +1156,7 @@ const actions = {
   }),
 
   'chat': () => {
+    if (state.public) { openBot(); return; }
     const order = state.boot.order;
     if (order) { openChat(order.id, 'Заказ ' + order.code, 'order'); return; }
     if (state.boot.support) { actions.support(); return; }
@@ -1112,6 +1208,8 @@ const actions = {
     render();
   },
 
+  'doc-back': () => { state.view = state.doc.from || 'about'; render(); },
+
   'seller-back': () => { state.seller.current = null; render(); },
 
   'seller-instr': () => { state.seller.instruction = ''; render(); },
@@ -1137,14 +1235,7 @@ function handleAction(raw) {
     return;
   }
   if (kind === 'filter') { state.filter = value; render(); return; }
-  if (kind === 'doc') {
-    const docs = (state.boot.about && state.boot.about.docs) || [];
-    const doc = docs.find((d) => d.key === value);
-    if (!doc || !doc.url) { toast('Документ готовим', true); return; }
-    if (tg && tg.openLink) tg.openLink(doc.url);
-    else window.open(doc.url, '_blank');
-    return;
-  }
+  if (kind === 'doc') { haptic('light'); openDoc(value); return; }
   if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {
@@ -1193,6 +1284,16 @@ function isLight() {
   return window.matchMedia('(prefers-color-scheme: light)').matches;
 }
 
+/* Свежие клиенты рисуют поверх страницы свои кнопки сверху. Telegram сообщает,
+   сколько места они занимают, — иначе наша шапка уезжает под них. */
+function applyInsets() {
+  if (!tg) return;
+  const safe = tg.safeAreaInset || {};
+  const content = tg.contentSafeAreaInset || {};
+  const top = (safe.top || 0) + (content.top || 0);
+  document.documentElement.style.setProperty('--tg-top', top + 'px');
+}
+
 function applyTheme() {
   const light = isLight();
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
@@ -1203,14 +1304,20 @@ function applyTheme() {
 
 async function boot() {
   applyTheme();
+  applyInsets();
 
   if (tg) {
     tg.ready();
     tg.expand();
-    if (tg.onEvent) tg.onEvent('themeChanged', applyTheme);
+    if (tg.onEvent) {
+      tg.onEvent('themeChanged', applyTheme);
+      tg.onEvent('safeAreaChanged', applyInsets);
+      tg.onEvent('contentSafeAreaChanged', applyInsets);
+    }
 
     if (tg.BackButton) {
       tg.BackButton.onClick(() => {
+        if (state.view === 'doc') { handleAction('doc-back'); return; }
         if (state.seller.current) state.seller.current = null;
         else state.view = 'home';
         render();
@@ -1223,7 +1330,17 @@ async function boot() {
     // Незакрытый заказ важнее витрины — открываем сразу на нём.
     if (state.boot.order && state.boot.order.isOpen) state.view = 'order';
   } catch (err) {
-    state.error = err.message;
+    // Открыли в браузере, а не из бота: показываем витрину только для чтения.
+    if (tg && tg.initData) {
+      state.error = err.message;
+    } else {
+      try {
+        state.boot = await api('/api/public');
+        state.public = true;
+      } catch (publicErr) {
+        state.error = publicErr.message;
+      }
+    }
   }
   render();
 }

@@ -190,7 +190,8 @@ async def main() -> int:
     about = "\n".join(bot.texts_to(BUYER))
     check("/about показывает реквизиты", "ИНН 123456789012" in about, about[:120])
     check("/about показывает контакты", "help@example.com" in about)
-    check("/about перечисляет документы", "Оферта" in about and "готовится" in about)
+    check("/about перечисляет документы",
+          "Публичная оферта" in about and "/docs/offer" in about, about[-200:])
 
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/help"))

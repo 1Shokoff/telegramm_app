@@ -239,7 +239,13 @@ async def nav_terms(call: CallbackQuery, cfg: Config) -> None:
     await call.message.answer(
         "<b>Условия заказа</b>\n\n"
         "После оплаты вы указываете UDID устройства. Продавец выполнит установку сертификата "
-        "и подготовит инструкцию.\n\n" + texts.PRIVACY
+        "и подготовит инструкцию. В цену входит установка любых приложений каталога "
+        "на одно устройство.\n\n"
+        + texts.PRIVACY
+        + "\n\n"
+        + texts.CONSENT_NOTE
+        + texts.legal_footer(cfg),
+        disable_web_page_preview=True,
     )
     await call.answer()
 
@@ -249,15 +255,20 @@ async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
     await call.message.answer(
         "<b>Оформление заказа</b>\n\n"
         "%s\nUDID укажете следующим шагом.\n\n"
-        "Цена: <b>%s</b>\nОплата: %s"
+        "Цена: <b>%s</b> — установка любых приложений каталога на одно устройство.\n"
+        "Оплата: %s\n\n"
+        "%s%s"
         % (
             texts.e(cfg.product_title),
             texts.money(cfg.price_rub),
             {"manual": "перевод с подтверждением", "demo": "демо, без списания", "stars": "Telegram Stars"}[
                 cfg.payment_mode
             ],
+            texts.CONSENT_NOTE,
+            texts.legal_footer(cfg),
         ),
         reply_markup=keyboards.confirm_order_kb(),
+        disable_web_page_preview=True,
     )
     await call.answer()
 

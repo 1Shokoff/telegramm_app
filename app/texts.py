@@ -15,6 +15,19 @@ def money(rub: int) -> str:
     return "{:,} ₽".format(rub).replace(",", " ")
 
 
+def apps_count(n: int) -> str:
+    """«1 приложение», «2 приложения», «24 приложения», «25 приложений»."""
+    tail = n % 100
+    last = n % 10
+    if 11 <= tail <= 14 or last == 0 or last >= 5:
+        word = "приложений"
+    elif last == 1:
+        word = "приложение"
+    else:
+        word = "приложения"
+    return "%d %s" % (n, word)
+
+
 def e(value: object) -> str:
     return escape(str(value if value is not None else ""), quote=False)
 
@@ -174,6 +187,7 @@ def help_text(support_username: str, has_webapp: bool) -> str:
         "/start — витрина и новый заказ",
         "/order — статус вашего заказа",
         "/udid — как найти UDID",
+        "/about — документы, контакты и реквизиты",
         "/forget — удалить мои данные из бота",
     ]
     if has_webapp:
@@ -183,6 +197,35 @@ def help_text(support_username: str, has_webapp: bool) -> str:
         lines.append("")
         lines.append("Живой человек: @%s" % e(support_username))
     return "\n".join(lines)
+
+
+def doc_links(cfg: Config) -> str:
+    """Строка со ссылками на документы; пустая, пока документов нет."""
+    links = []
+    for key, title, _hint in const.DOCUMENTS:
+        url = cfg.doc_url(key)
+        if url:
+            links.append('<a href="%s">%s</a>' % (e(url), e(title)))
+    return " · ".join(links)
+
+
+def legal_footer(cfg: Config) -> str:
+    """Подвал сообщения: реквизиты и документы — то же, что в витрине."""
+    lines = []
+    if cfg.legal_line:
+        lines.append(e(cfg.legal_line))
+    links = doc_links(cfg)
+    if links:
+        lines.append(links)
+    if not lines:
+        return ""
+    return "\n\n<i>%s</i>" % "\n".join(lines)
+
+
+CONSENT_NOTE = (
+    "Оформляя заказ, вы принимаете условия публичной оферты и даёте согласие "
+    "на обработку персональных данных."
+)
 
 
 def about(cfg: Config) -> str:
@@ -196,8 +239,8 @@ def about(cfg: Config) -> str:
         "<b>О сервисе iApki</b>",
         "",
         "Ставим на ваш iPhone приложения, которых нет в App Store: "
-        "%d приложений каталога. Оплата → вы присылаете UDID → мы ставим "
-        "сертификат → вы получаете инструкцию." % catalog.count(),
+        "в каталоге %s. Оплата → вы присылаете UDID → мы ставим "
+        "сертификат → вы получаете инструкцию." % apps_count(catalog.count()),
         "",
         "<b>Документы</b>",
     ]

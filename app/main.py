@@ -174,6 +174,8 @@ async def run() -> None:
     log.info("HTTP слушает %s:%s, Mini App: %s", cfg.host, cfg.port, cfg.webapp_url or "выключен")
 
     me = await connect_telegram(bot, cfg)
+    # Гостю витрины в браузере показываем кнопку «Открыть бота» — нужен юзернейм.
+    app["bot_username"] = me.username or cfg.bot_username
     log.info("Бот @%s запущен, режим оплаты: %s", me.username, cfg.payment_mode)
     await setup_profile(bot, cfg)
 

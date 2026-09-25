@@ -365,9 +365,11 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
               about["legalName"].startswith("Самозанятый") and about["inn"] == "123456789012")
         check("в витрине есть контакты", about["email"] == "help@example.com")
         docs = {d["key"]: d for d in about["docs"]}
-        check("документы перечислены", set(docs) == {"offer", "privacy", "refund"}, str(list(docs)))
-        check("ссылка на готовый документ", docs["offer"]["url"] == "https://example.com/offer")
-        check("документ без ссылки помечен пустым", docs["privacy"]["url"] == "")
+        check("документы перечислены",
+              set(docs) == {"offer", "privacy", "refund", "consent"}, str(list(docs)))
+        check("ссылка из .env перекрывает свой документ",
+              docs["offer"]["url"] == "https://example.com/offer")
+        check("свой документ открывается в витрине", docs["privacy"]["url"] == "/docs/privacy")
 
         res = await client.get("/api/seller/orders", headers=buyer_headers)
         check("панель продавца закрыта", res.status == 403)
@@ -375,6 +377,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         res = await client.post("/api/order/create", headers=buyer_headers)
         order = (await res.json())["order"]
         check("заказ через API создан", order["code"] == "NP-0003", order["code"])
+
+        events = await db.list_events(order["id"])
+        check("согласие зафиксировано в журнале",
+              any(e["type"] == "consent" for e in events), str([e["type"] for e in events]))
 
         res = await client.post(
             "/api/order/udid",
@@ -509,9 +515,42 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         res = await client.get("/")
         body = await res.text()
         check("index.html отдаётся", res.status == 200 and "iApki" in body)
+        check("ссылки на статику помечены версией",
+              "app.js?v=" in body and "__V__" not in body, body[:200])
+        check("витрина не кэшируется", "no-cache" in res.headers.get("Cache-Control", ""))
 
         res = await client.get("/static/app.js")
         check("статика отдаётся", res.status == 200)
+
+        # Публичный режим: магазин должен открываться без Telegram —
+        # иначе модерация платёжной системы не увидит витрину.
+        res = await client.get("/api/public")
+        public = await res.json()
+        check("витрина открывается без подписи", res.status == 200 and public["public"] is True)
+        check("в публичной витрине есть каталог", len(public["catalog"]) == 24)
+        check("у всех приложений есть описание",
+              all(a["desc"] for a in public["catalog"]))
+        check("в публичной витрине есть реквизиты",
+              public["about"]["legalLine"].startswith("Самозанятый"))
+        check("в публичной витрине нет чужих данных", public["order"] is None)
+
+        res = await client.get("/api/doc/refund")
+        doc = await res.json()
+        check("документ отдаётся витрине",
+              res.status == 200 and "<h1>" in doc["html"] and "Возврат" in doc["title"])
+        check("реквизиты подставлены в документ", "123456789012" in doc["html"])
+
+        res = await client.get("/api/doc/нет-такого")
+        check("неизвестный документ — 404", res.status == 404)
+
+        res = await client.get("/docs/offer")
+        page = await res.text()
+        check("страница документа открывается", res.status == 200 and "оферта" in page.lower())
+        check("в подвале страницы есть реквизиты", "ИНН 123456789012" in page)
+        check("в подвале есть ссылки на документы", 'href="/docs/privacy"' in page)
+
+        res = await client.get("/docs")
+        check("список документов открывается", res.status == 200)
     finally:
         await client.close()
 
