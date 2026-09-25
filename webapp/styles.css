@@ -59,8 +59,11 @@ body { overscroll-behavior-y: none; }
   display: flex;
   align-items: center;
   gap: 12px;
-  /* --tg-top — место под кнопки Telegram: на телефоне они рисуются поверх шапки. */
-  padding: calc(14px + var(--tg-top, 0px)) 0 10px;
+  /* --tg-top — место под кнопки Telegram: на телефоне они рисуются поверх шапки.
+     Правое поле отодвигает круглые кнопки от края окна, нижнее — отделяет
+     шапку от первого блока, иначе она на него налезает. */
+  padding: calc(12px + var(--tg-top, 0px)) 10px 10px 0;
+  margin-bottom: 10px;
   position: sticky;
   top: 0;
   background: var(--bg);
@@ -679,7 +682,7 @@ body.chat-mode .view { padding-bottom: 110px; }
 :root { --brand: #c8ff31; --radius-l: 26px; --radius-m: 18px; }
 :root[data-theme="light"] { --line: #dce2d2; --surface-2: #edf1e6; --surface-3: #e5ebdb; --muted: #606955; }
 body { background-image: radial-gradient(ellipse at 85% 0%, #c8ff310c, transparent 460px); }
-.topbar { padding: calc(18px + var(--tg-top, 0px)) 0 18px; gap: 10px; }
+.topbar { padding: calc(14px + var(--tg-top, 0px)) 12px 12px 0; margin-bottom: 12px; gap: 10px; }
 a.brand { text-decoration: none; color: inherit; }
 .brand-icon { width: 44px; height: 44px; flex-basis: 44px; border-radius: 14px; overflow: hidden; background: var(--brand); }
 .brand-icon img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -794,7 +797,9 @@ a.brand { text-decoration: none; color: inherit; }
 .topbar::after {
   content: "";
   position: absolute; left: 0; right: 0; top: 100%;
-  height: 22px;
+  /* Чуть ниже отступа под шапкой: растворяет уезжающий контент,
+     но в покое не приглушает верх карточки. */
+  height: 16px;
   background: linear-gradient(var(--bg), transparent);
   pointer-events: none;
 }
@@ -894,7 +899,7 @@ button.brand:active { opacity: .75; }
   .shell { max-width: 1120px; padding: 0 32px; }
   /* Шапка — только логотип: со строкой разделов она выходила слишком толстой.
      Правое поле отодвигает кнопки помощи и переписки от края. */
-  .topbar { order: 1; padding: calc(20px + var(--tg-top, 0px)) 40px 12px 0; }
+  .topbar { order: 1; padding: calc(16px + var(--tg-top, 0px)) 40px 10px 0; margin-bottom: 8px; }
   .brand-title { font-size: 26px; }
   .brand-sub { font-size: 13px; }
 
