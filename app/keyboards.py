@@ -177,8 +177,13 @@ def seller_chat_kb(order_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def instruction_prompt_kb(order_id: int, has_template: bool) -> InlineKeyboardMarkup:
+def instruction_prompt_kb(order_id: int, has_template: bool, plain: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура под запросом текста. plain — можно отправить без примечания."""
     rows = []
+    if plain:
+        rows.append([
+            InlineKeyboardButton(text="Отправить без примечания", callback_data=cb("instrgo", order_id))
+        ])
     if has_template:
         rows.append([InlineKeyboardButton(text="Отправить шаблон", callback_data=cb("tmpl", order_id))])
     rows.append([InlineKeyboardButton(text="Отмена", callback_data=cb("card", order_id))])

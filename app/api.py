@@ -6,7 +6,17 @@ from pathlib import Path
 from aiogram.types import BufferedInputFile
 from aiohttp import web
 
-from . import auth, catalog, const, db, legal, pages, texts, udid as udid_mod
+from . import (
+    auth,
+    catalog,
+    const,
+    db,
+    instruction as instruction_mod,
+    legal,
+    pages,
+    texts,
+    udid as udid_mod,
+)
 from .config import Config
 from .service import OrderService, ServiceError
 
@@ -147,7 +157,9 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "productName": catalog.product_name(order.get("app_slug")),
         "udidMasked": udid_mod.mask(order.get("device_udid")),
         "hasUdid": bool(order.get("device_udid")),
+        # instruction — примечание продавца к шаблону, может быть пустым.
         "instruction": order.get("instruction"),
+        "instructionReady": order["status"] == const.DONE,
         "note": order.get("seller_note"),
         "createdAt": order["created_at"],
         "updatedAt": order["updated_at"],
@@ -231,6 +243,11 @@ async def bootstrap(request: web.Request) -> web.Response:
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
             "about": about_block(cfg),
+            # Шаблон инструкции: витрина показывает его, когда продавец отправил.
+            "instruction": {
+                "steps": instruction_mod.public_steps(),
+                "bots": instruction_mod.bot_links(),
+            },
             "privacy": texts.PRIVACY,
             "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,
             "order": order_public(order),

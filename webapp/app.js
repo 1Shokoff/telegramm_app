@@ -593,16 +593,82 @@ function chatButton(label) {
   return '<button class="btn btn-secondary" data-action="chat">' + esc(label) + badge + '</button>';
 }
 
+/* ---------------------------------------------------------- инструкция */
+
+/* Слайд шага уже содержит номер, заголовок и подсказку — дублировать их
+   рядом незачем. Тот же текст доступен списком в раскрывающемся блоке. */
+function instructionStep(step) {
+  return (
+    '<li class="instr-step">' +
+      '<img class="instr-shot" src="' + esc(step.image) + '" loading="lazy" ' +
+        'alt="Шаг ' + step.number + ' из 10: ' + esc(step.title) + '. ' + esc(step.subtitle) + '">' +
+    '</li>'
+  );
+}
+
+function instructionTextStep(step) {
+  return (
+    '<li class="instr-line">' +
+      '<span class="instr-num">' + step.number + '</span>' +
+      '<span class="instr-text">' +
+        '<span class="instr-title">' + esc(step.title) + '</span>' +
+        '<span class="instr-sub">' + esc(step.subtitle) + '</span>' +
+        '<span class="instr-hint-line">' + esc(step.hint) + '</span>' +
+      '</span>' +
+    '</li>'
+  );
+}
+
+function instructionBlock(order) {
+  const data = (state.boot && state.boot.instruction) || { steps: [], bots: [] };
+  if (!data.steps.length) return '';
+
+  const bots = data.bots.map((bot) => (
+    '<button type="button" class="instr-bot" data-action="bot:' + esc(bot.username) + '">' +
+      '<span class="instr-bot-name">@' + esc(bot.username) + '</span>' +
+      '<span class="instr-bot-hint">' + esc(bot.hint) + '</span>' +
+    '</button>'
+  )).join('');
+
+  return (
+    '<div class="section-head mt"><h2>Инструкция по установке</h2>' +
+      '<span class="badge">' + data.steps.length + ' шагов</span></div>' +
+    '<div class="card instr">' +
+      '<p class="muted">Всё делается в двух ботах: сначала получаем сертификат, ' +
+        'потом подписываем и ставим приложение.</p>' +
+      '<div class="instr-bots">' + bots + '</div>' +
+      (order.hasUdid
+        ? '<div class="req-row"><span class="req-text">' +
+            '<span class="req-label">Ваш UDID</span>' +
+            '<span class="req-value mono">' + esc(order.udidMasked) + '</span>' +
+          '</span></div>'
+        : '') +
+      '<ol class="instr-steps">' + data.steps.map(instructionStep).join('') + '</ol>' +
+      '<details class="disclosure"><summary>Шаги текстом</summary>' +
+        '<ol class="instr-lines">' + data.steps.map(instructionTextStep).join('') + '</ol>' +
+      '</details>' +
+      (order.instruction
+        ? '<div class="instr-note">' +
+            '<div class="instr-note-title">Примечание продавца</div>' +
+            '<div class="body" style="white-space:pre-wrap">' + esc(order.instruction) + '</div>' +
+          '</div>'
+        : '') +
+    '</div>'
+  );
+}
+
 function viewOrderStatus(order) {
   const step = order.step;
   const rows = STEP_LABELS.map((pair, i) => {
     const n = i + 1;
     const cls = step > n ? 'tl done' : (step === n ? 'tl active' : 'tl pending');
     const mark = step > n ? '✓' : String(n);
+    // Последний шаг после отправки объясняет, где искать саму инструкцию.
+    const sub = n === 4 && order.instructionReady ? 'Инструкция со скриншотами — ниже' : pair[1];
     return (
       '<div class="' + cls + '"><div class="dot">' + mark + '</div>' +
       '<div><div class="t">' + esc(pair[0]) + '</div>' +
-      '<div class="s">' + esc(pair[1]) + '</div></div></div>'
+      '<div class="s">' + esc(sub) + '</div></div></div>'
     );
   }).join('');
 
@@ -618,12 +684,12 @@ function viewOrderStatus(order) {
         '<div class="sub">UDID ' + esc(order.udidMasked) + '</div></div>' +
       '</div>' +
       '<div class="timeline">' + rows + '</div>' +
-      '<div class="notice">' + esc(order.hint) + '</div>' +
-      (order.instruction
-        ? '<div class="card tight"><pre class="instruction">' + esc(order.instruction) + '</pre></div>'
-        : '') +
+      // Пока продавец не отправил инструкцию, на четвёртом шаге видна подсказка,
+      // а после отправки на её месте — сама инструкция со скриншотами.
+      (order.instructionReady ? '' : '<div class="notice">' + esc(order.hint) + '</div>') +
       '<button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button>' +
     '</div>' +
+    (order.instructionReady ? instructionBlock(order) : '') +
     (order.status === 'done'
       ? '<button class="btn btn-primary" data-action="new-order">Оформить новый заказ</button>'
       : '') +
@@ -832,9 +898,8 @@ function sellerActions(o) {
     buttons.push('<button class="btn btn-secondary btn-sm" data-action="seller-act:payno">Платёж не найден</button>');
   } else if (o.status === 'udid') {
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:installed">Сертификат установлен</button>');
-  } else if (o.status === 'installed') {
-    buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-instr">Отправить инструкцию</button>');
   }
+  // На шаге «Инструкция» кнопка не нужна: ниже стоит форма отправки.
   if (!buttons.length) return '';
   return '<div class="btn-row mt">' + buttons.join('') + '</div>';
 }
@@ -854,10 +919,19 @@ function viewSellerOrder(o) {
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
       sellerActions(o) +
     '</div>' +
-    (state.seller.instruction !== null && o.status === 'installed'
-      ? '<div class="card"><label class="field"><span>Текст инструкции</span>' +
-        '<textarea id="instrText" placeholder="Что сделать покупателю после установки…">' + esc(state.seller.instruction) + '</textarea></label>' +
-        '<button class="btn btn-primary mt" data-action="seller-send-instr">Отправить покупателю</button></div>'
+    (o.status === 'installed'
+      ? '<div class="section-head mt"><h2>Инструкция</h2></div>' +
+        '<div class="card">' +
+          '<p class="muted">Покупатель получит готовую инструкцию из ' +
+            ((state.boot.instruction && state.boot.instruction.steps.length) || 10) +
+            ' шагов со скриншотами. Ниже можно добавить примечание к этому заказу — ' +
+            'оно встанет в конце инструкции. Поле можно оставить пустым.</p>' +
+          '<label class="field"><span>Текст инструкции</span>' +
+          '<textarea id="instrText" placeholder="Например: сертификат действует до 25 октября">' +
+            esc(state.seller.instruction || '') + '</textarea></label>' +
+          '<button class="btn btn-primary mt" data-action="seller-send-instr">' +
+            'Отправить инструкцию</button>' +
+        '</div>'
       : '') +
     '<button class="btn btn-secondary" data-action="seller-notify">🔔 Уведомления по заказу</button>' +
     '<button class="btn btn-secondary mt" data-action="seller-chat">💬 Переписка' +
@@ -1461,8 +1535,6 @@ const actions = {
 
   'seller-back': () => { state.seller.current = null; render(); },
 
-  'seller-instr': () => { state.seller.instruction = ''; render(); },
-
   'seller-send-instr': () => guard(async () => {
     await sellerAction('instruction', { text: state.seller.instruction });
     state.seller.instruction = '';
@@ -1486,6 +1558,13 @@ function handleAction(raw) {
   if (kind === 'filter') { state.filter = value; render(); return; }
   if (kind === 'doc') { haptic('light'); openDoc(value); return; }
   if (kind === 'copy') { haptic('light'); copyValue(value); return; }
+  if (kind === 'bot') {
+    haptic('light');
+    const url = 'https://t.me/' + value;
+    if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
+    else window.open(url, '_blank');
+    return;
+  }
   if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {

@@ -224,18 +224,23 @@ class OrderService:
         return updated
 
     async def send_instruction(self, order_id: int, text: str, actor: str) -> dict:
+        """Отправляет покупателю готовую инструкцию; text — примечание к ней.
+
+        Примечание необязательно: сами шаги лежат в шаблоне, продавцу остаётся
+        добавить только то, что относится к этому заказу.
+        """
         order = await self._load(order_id)
         if order["status"] not in (const.UDID, const.INSTALLED):
             raise ServiceError("Инструкция отправляется после установки сертификата.")
-        body = (text or "").strip()
-        if len(body) < 5:
-            raise ServiceError("Текст инструкции слишком короткий.")
+        note = (text or "").strip()
+        if len(note) > self.MESSAGE_LIMIT:
+            raise ServiceError("Примечание слишком длинное.")
 
-        updated = await db.set_instruction(order_id, body, actor)
+        updated = await db.set_instruction(order_id, note, actor)
         assert updated
         await self.notify_buyer(
             updated,
-            "📄 <b>Инструкция по заказу %s</b>\n\n%s" % (texts.e(updated["code"]), texts.e(body)),
+            texts.instruction_message(updated, note, self.cfg.webapp_enabled),
             const.NOTIFY_STATUS,
         )
         return updated

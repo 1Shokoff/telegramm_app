@@ -187,7 +187,12 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
 
     order = await svc.send_instruction(order["id"], "Профиль → Настройки → Основные", "seller:%d" % SELLER)
     check("статус: готово", order["status"] == const.DONE)
-    check("инструкция ушла покупателю", any("Инструкция" in t for t in bot.to(BUYER)))
+    sent = bot.to(BUYER)[-1]
+    check("инструкция ушла покупателю", "Инструкция по заказу" in sent)
+    check("в инструкции есть шаги шаблона", "Введите свой UDID" in sent, sent[:120])
+    check("в инструкции есть боты",
+          "@iRegerBot" in sent and "@isignerbot" in sent)
+    check("примечание продавца в конце", "Профиль → Настройки → Основные" in sent)
 
     events = await db.list_events(order["id"])
     check("история пишется", len(events) >= 5, "событий: %d" % len(events))
@@ -374,6 +379,13 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("цена в витрине", data["product"]["priceText"].startswith("3"))
         check("покупатель не продавец", data["user"]["isSeller"] is False)
 
+        steps = data["instruction"]["steps"]
+        check("шаблон инструкции отдаётся витрине", len(steps) == 10, str(len(steps)))
+        check("у шагов есть картинки",
+              all(s["image"].startswith("/static/img/instruction/") for s in steps))
+        check("в шаблоне два бота",
+              [b["username"] for b in data["instruction"]["bots"]] == ["iRegerBot", "isignerbot"])
+
         about = data["about"]
         check("в витрине есть реквизиты продавца",
               about["legalName"].startswith("Самозанятый") and about["inn"] == "123456789012")
@@ -458,12 +470,15 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         check("сертификат отмечен", (await res.json())["order"]["status"] == const.INSTALLED)
 
+        # Примечание необязательно: шаги покупатель получает из шаблона.
         res = await client.post(
             "/api/seller/action",
             headers=seller_headers,
-            json={"action": "instruction", "orderId": order["id"], "text": "Готово, профиль установлен"},
+            json={"action": "instruction", "orderId": order["id"], "text": ""},
         )
-        check("инструкция отправлена", (await res.json())["order"]["status"] == const.DONE)
+        done = (await res.json())["order"]
+        check("инструкция отправлена без примечания",
+              done["status"] == const.DONE and done["instructionReady"] is True)
 
         res = await client.get("/api/seller/orders?status=all", headers=seller_headers)
         data = await res.json()

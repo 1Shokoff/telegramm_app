@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from .. import const, db, keyboards, texts
+from .. import const, db, instruction, keyboards, texts
 from ..config import Config
 from ..service import OrderService, ServiceError
 
@@ -281,11 +281,30 @@ async def cb_instr(call: CallbackQuery, state: FSMContext, cfg: Config) -> None:
     template = cfg.instruction_template
     hint = "\n\n<b>Шаблон:</b>\n%s" % texts.e(template) if template else ""
     await call.message.answer(
-        "Пришлите текст инструкции для заказа <b>%s</b> одним сообщением.%s"
-        % (texts.e(order["code"]), hint),
-        reply_markup=keyboards.instruction_prompt_kb(order["id"], bool(template)),
+        "Заказ <b>%s</b>: покупатель получит готовую инструкцию из %d шагов "
+        "со скриншотами.\n\nПришлите примечание одним сообщением — оно встанет "
+        "в конце, — или отправьте инструкцию без него.%s"
+        % (texts.e(order["code"]), len(instruction.STEPS), hint),
+        reply_markup=keyboards.instruction_prompt_kb(order["id"], bool(template), plain=True),
     )
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("o:instrgo:"))
+async def cb_instruction_plain(call: CallbackQuery, state: FSMContext, service: OrderService) -> None:
+    """Отправка шаблона без примечания."""
+    parsed = keyboards.parse_cb(call.data)
+    if not parsed:
+        return
+    try:
+        order = await service.send_instruction(parsed[1], "", _actor(call))
+    except ServiceError as exc:
+        await call.answer(str(exc), show_alert=True)
+        return
+    await state.clear()
+    text, kb = await _card(order)
+    await call.message.answer("Инструкция отправлена.\n\n" + text, reply_markup=kb)
+    await call.answer("Отправлено")
 
 
 @router.callback_query(F.data.startswith("o:tmpl:"))

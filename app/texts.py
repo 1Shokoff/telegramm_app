@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape
 
-from . import catalog, const, udid as udid_mod
+from . import catalog, const, instruction as instruction_mod, udid as udid_mod
 from .config import Config
 
 DONE_MARK = "✅"
@@ -175,6 +175,42 @@ def payment_instructions(order: dict, cfg: Config) -> str:
         "продавец увидит его в заказе."
     )
     return "\n".join(lines)
+
+
+def instruction_message(order: dict, note: str, webapp_enabled: bool) -> str:
+    """Инструкция в чат бота: шаги текстом, ссылки на ботов и примечание.
+
+    Картинки шагов живут в витрине — сюда идёт только текст, иначе в чат
+    прилетело бы десять тяжёлых слайдов.
+    """
+    lines = [
+        "📄 <b>Инструкция по заказу %s</b>" % e(order["code"]),
+        "",
+        "Понадобятся два бота:",
+    ]
+    for bot in instruction_mod.BOTS:
+        lines.append("• @%s — %s" % (e(bot["username"]), e(bot["hint"])))
+    lines.append("")
+
+    for number, step in enumerate(instruction_mod.STEPS, start=1):
+        lines.append("<b>%d. %s</b>" % (number, e(step["title"])))
+        lines.append(e(step["subtitle"]))
+    lines.append("")
+
+    udid = order.get("device_udid")
+    if udid:
+        lines.append("Ваш UDID: <code>%s</code>" % e(udid))
+        lines.append("")
+
+    if note:
+        lines.append("<b>От продавца</b>")
+        lines.append(e(note))
+        lines.append("")
+
+    if webapp_enabled:
+        lines.append("<i>Инструкция со скриншотами каждого шага — в приложении, "
+                     "на экране заказа.</i>")
+    return "\n".join(lines).strip()
 
 
 def receipt_from_buyer(order: dict, title: str) -> str:

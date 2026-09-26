@@ -448,6 +448,60 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 }
 .req-copy:active { transform: scale(.92); color: var(--accent); border-color: #c8ff3166; }
 
+/* ---------------------------------------------------------- инструкция */
+
+.instr-bots { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
+.instr-bot {
+  display: flex; flex-direction: column; gap: 3px;
+  width: 100%;
+  padding: 13px 14px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit; text-align: left;
+  cursor: pointer;
+}
+.instr-bot-name { font-weight: 660; font-size: 15px; color: var(--accent); }
+:root[data-theme="light"] .instr-bot-name { color: #486500; }
+.instr-bot-hint { color: var(--muted); font-size: 13px; }
+.instr-bot:active { transform: scale(.98); }
+
+.instr-steps { list-style: none; margin: 16px 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+
+.instr-lines { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.instr-line { display: flex; align-items: flex-start; gap: 12px; }
+.instr-hint-line { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.instr-num {
+  flex: 0 0 30px;
+  width: 30px; height: 30px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-text);
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 14px;
+}
+.instr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.instr-title { font-size: 16px; font-weight: 660; letter-spacing: -0.2px; }
+.instr-sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+
+/* Слайд шага: вертикальный кадр, поэтому ограничиваем ширину. */
+.instr-shot {
+  display: block;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line);
+}
+
+.instr-note {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.instr-note-title { font-weight: 660; margin-bottom: 6px; }
+
 /* --------------------------------------------------------------- подвал */
 
 /* Реквизиты и документы — на каждом экране витрины и на каждой странице. */
