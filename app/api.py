@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from aiogram.types import BufferedInputFile
 from aiohttp import web
 
 from . import auth, catalog, const, db, legal, pages, texts, udid as udid_mod
@@ -27,6 +28,27 @@ def asset_version() -> str:
         if path.is_file():
             newest = max(newest, path.stat().st_mtime)
     return "%x" % int(newest)
+
+
+RECEIPT_LIMIT = 10 * 1024 * 1024
+PHOTO_TYPES = ("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif")
+RECEIPT_TYPES = PHOTO_TYPES + ("application/pdf",)
+
+
+def requisites_public(cfg: Config) -> list[dict]:
+    """Реквизиты для витрины: к строкам добавляем адрес иконки."""
+    icons = catalog.icon_files()
+    rows = []
+    for row in cfg.requisites:
+        icon = row["icon"]
+        if icon == "sbp":
+            url = "/static/brand/sbp.svg"
+        elif icon and icon in icons:
+            url = "/static/icons/" + icons[icon]
+        else:
+            url = ""
+        rows.append(dict(row, iconUrl=url))
+    return rows
 
 
 def about_block(cfg: Config) -> dict:
@@ -196,6 +218,7 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "mode": cfg.payment_mode,
                 "details": cfg.payment_details,
                 "stars": cfg.price_stars,
+                "requisites": requisites_public(cfg),
             },
             "catalog": [
                 dict(item, priceText=texts.money(item["price"]))
@@ -239,7 +262,11 @@ async def public_bootstrap(request: web.Request) -> web.Response:
                 "priceText": texts.money(cfg.price_rub),
                 "appsCount": catalog.count(),
             },
-            "payment": {"mode": cfg.payment_mode, "details": "", "stars": cfg.price_stars},
+            # Реквизиты перевода гостю не показываем: они нужны только в заказе.
+            "payment": {
+                "mode": cfg.payment_mode, "details": "",
+                "stars": cfg.price_stars, "requisites": [],
+            },
             "catalog": [
                 dict(item, priceText=texts.money(item["price"]))
                 for item in catalog.public_catalog(cfg.price_rub)
@@ -291,6 +318,45 @@ async def claim(request: web.Request) -> web.Response:
     data = await body(request)
     order = await service_of(request).claim_payment(order_id_of(data), user.id)
     return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/order/receipt")
+async def upload_receipt(request: web.Request) -> web.Response:
+    """Чек об оплате из витрины: отдаём его Telegram, у себя файл не храним."""
+    user = await current_user(request)
+    try:
+        order_id = int(request.query.get("orderId", 0))
+    except ValueError:
+        raise ApiError("Некорректный orderId")
+
+    try:
+        field = await (await request.multipart()).next()
+    except Exception:
+        raise ApiError("Ожидался файл")
+    if field is None or field.name != "file":
+        raise ApiError("Ожидался файл")
+
+    content_type = (field.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if content_type not in RECEIPT_TYPES:
+        raise ApiError("Подойдёт картинка или PDF")
+
+    data = bytearray()
+    while True:
+        chunk = await field.read_chunk()
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > RECEIPT_LIMIT:
+            raise ApiError("Файл больше 10 МБ — пришлите поменьше")
+    if not data:
+        raise ApiError("Файл пустой")
+
+    name = field.filename or ("чек.pdf" if content_type == "application/pdf" else "чек.jpg")
+    file = BufferedInputFile(bytes(data), filename=name)
+    await service_of(request).attach_receipt(
+        order_id, user.id, file, is_photo=content_type in PHOTO_TYPES, title=name
+    )
+    return web.json_response({"ok": True, "name": name})
 
 
 @routes.post("/api/order/demopay")

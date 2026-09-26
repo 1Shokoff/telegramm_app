@@ -80,6 +80,37 @@ def _letter(name: str) -> str:
 CATALOG_NAME = "Весь каталог"
 
 
+# Как покупатели называют банки в реквизитах — приводим к слагам каталога.
+BANK_ALIASES = {
+    "тинькофф": "tbank",
+    "тинькоф": "tbank",
+    "сбер": "sber",
+    "альфа": "alfa",
+    "райф": "raiffeisen",
+    "промсвязьбанк": "psb",
+    "газпром": "gazprombank",
+    "совком": "sovcombank",
+}
+
+
+def _bank_key(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def bank_icon(name: str) -> str:
+    """Слаг иконки банка по его названию в реквизитах; пусто — иконки нет."""
+    key = _bank_key(name)
+    if not key:
+        return ""
+    for alias, slug in BANK_ALIASES.items():
+        if alias in key:
+            return slug
+    for app in APPS:
+        if app["category"] == "Банки" and _bank_key(app["name"]) == key:
+            return app["slug"]
+    return ""
+
+
 def get_app(slug: str | None) -> dict | None:
     if not slug:
         return None

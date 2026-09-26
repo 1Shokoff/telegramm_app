@@ -223,6 +223,49 @@ function viewCheckout() {
   );
 }
 
+/* --------------------------------------------------------------- оплата */
+
+function copyIcon() {
+  return (
+    '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect x="9" y="9" width="11" height="11" rx="2.5"/>' +
+      '<path d="M5 15V6a2 2 0 0 1 2-2h8"/>' +
+    '</svg>'
+  );
+}
+
+function copyButton(key, label) {
+  return (
+    '<button type="button" class="req-copy" data-action="copy:' + esc(key) + '" ' +
+      'aria-label="Скопировать: ' + esc(label) + '">' + copyIcon() + '</button>'
+  );
+}
+
+function requisiteRow(row) {
+  return (
+    '<div class="req-row">' +
+      (row.iconUrl
+        ? '<span class="req-icon"><img src="' + esc(row.iconUrl) + '" alt="" loading="lazy"></span>'
+        : '') +
+      '<span class="req-text">' +
+        '<span class="req-label">' + esc(row.label) + '</span>' +
+        '<span class="req-value">' + esc(row.value) + '</span>' +
+      '</span>' +
+      (row.copy ? copyButton(row.key, row.label) : '') +
+    '</div>'
+  );
+}
+
+function receiptBlock() {
+  return (
+    '<input type="file" id="receiptFile" accept="image/*,application/pdf" hidden>' +
+    '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить чек</button>' +
+    '<div class="cta-note">Скриншот перевода или чек из банка — продавец увидит его ' +
+      'в заказе. Ссылку на документ можно прислать сообщением в чат.</div>'
+  );
+}
+
 function viewPayment(order) {
   const b = state.boot;
   const mode = order.paymentMode;
@@ -242,13 +285,42 @@ function viewPayment(order) {
     '<h1>Оплата заказа</h1>' +
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' + esc(order.priceText) + '</p>' +
     '<div class="card">' +
-      (mode === 'manual'
-        ? '<div class="body" style="white-space:pre-wrap">' + esc(b.payment.details || 'Реквизиты уточните у продавца.') + '</div>' +
-          '<div class="notice">Укажите в комментарии к платежу номер заказа ' + esc(order.code) + '.</div>'
-        : '<div class="notice">' + esc(order.hint) + '</div>') +
+      (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
       action +
+      (mode === 'manual' ? receiptBlock() : '') +
     '</div>' +
     '<button class="btn btn-danger btn-sm" data-action="order-cancel">Отменить заказ</button>'
+  );
+}
+
+function paymentDetails(order) {
+  const b = state.boot;
+  const rows = b.payment.requisites || [];
+  const note = b.payment.details
+    ? '<div class="body mt" style="white-space:pre-wrap">' + esc(b.payment.details) + '</div>'
+    : '';
+
+  if (!rows.length) {
+    return (
+      (b.payment.details
+        ? '<div class="body" style="white-space:pre-wrap">' + esc(b.payment.details) + '</div>'
+        : '<div class="body">Реквизиты уточните у продавца.</div>') +
+      paymentComment(order)
+    );
+  }
+  return '<div class="requisites">' + rows.map(requisiteRow).join('') + '</div>' + note + paymentComment(order);
+}
+
+function paymentComment(order) {
+  // Номер заказа — тоже реквизит: без него продавец не поймёт, чей это перевод.
+  return (
+    '<div class="req-row comment">' +
+      '<span class="req-text">' +
+        '<span class="req-label">Комментарий к платежу</span>' +
+        '<span class="req-value">' + esc(order.code) + '</span>' +
+      '</span>' +
+      copyButton('code', 'номер заказа') +
+    '</div>'
   );
 }
 
@@ -259,7 +331,10 @@ function viewWaitingPayment(order) {
     '<h1>Проверяем платёж</h1>' +
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) +
       '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
-    '<div class="card"><button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button></div>' +
+    '<div class="card">' +
+      '<button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button>' +
+      (order.paymentMode === 'manual' ? receiptBlock() : '') +
+    '</div>' +
     chatButton('Чат с продавцом') +
     '<button class="btn btn-ghost btn-sm" data-action="order-help">Помощь по заказу</button>'
   );
@@ -1010,6 +1085,16 @@ function bindInputs() {
     });
   }
 
+  const receipt = document.getElementById('receiptFile');
+  if (receipt) {
+    receipt.addEventListener('change', () => {
+      const file = receipt.files && receipt.files[0];
+      // Сбрасываем поле: иначе повторный выбор того же файла не сработает.
+      receipt.value = '';
+      uploadReceipt(file);
+    });
+  }
+
   const agreeUdid = document.getElementById('agreeUdid');
   if (agreeUdid) {
     agreeUdid.addEventListener('change', () => {
@@ -1066,6 +1151,60 @@ function bindInputs() {
 }
 
 /* ----------------------------------------------------------------- действия */
+
+/* Копирование реквизита: в Telegram буфер обмена доступен через обычный API,
+   в старых клиентах остаётся запасной путь через скрытое поле. */
+function copyFallback(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  area.remove();
+  return ok;
+}
+
+function copyValue(key) {
+  const order = state.boot && state.boot.order;
+  const rows = (state.boot && state.boot.payment && state.boot.payment.requisites) || [];
+  const row = rows.find((r) => r.key === key);
+  const text = key === 'code' ? (order && order.code) : (row && row.value);
+  if (!text) return;
+
+  const done = () => toast('Скопировано');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      if (copyFallback(text)) done();
+      else toast('Не получилось скопировать', true);
+    });
+    return;
+  }
+  if (copyFallback(text)) done();
+  else toast('Не получилось скопировать', true);
+}
+
+function uploadReceipt(file) {
+  const order = state.boot.order;
+  if (!file || !order) return;
+  if (file.size > 10 * 1024 * 1024) { toast('Файл больше 10 МБ', true); return; }
+
+  guard(async () => {
+    const headers = {};
+    if (tg && tg.initData) headers['X-Init-Data'] = tg.initData;
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/order/receipt?orderId=' + order.id, {
+      method: 'POST', headers, body: form,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* пустой ответ */ }
+    if (!res.ok) throw new Error(data.error || 'Не удалось отправить файл');
+    toast('Чек отправлен продавцу');
+  });
+}
 
 async function guard(fn) {
   if (state.busy) return;
@@ -1126,6 +1265,11 @@ const actions = {
     toast('Заказ ' + data.order.code + ' создан');
     render();
   }),
+
+  'receipt-pick': () => {
+    const input = document.getElementById('receiptFile');
+    if (input) input.click();
+  },
 
   'pay-claim': () => guard(async () => {
     const data = await api('/api/order/claim', { method: 'POST', body: { orderId: state.boot.order.id } });
@@ -1310,6 +1454,7 @@ function handleAction(raw) {
   }
   if (kind === 'filter') { state.filter = value; render(); return; }
   if (kind === 'doc') { haptic('light'); openDoc(value); return; }
+  if (kind === 'copy') { haptic('light'); copyValue(value); return; }
   if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {

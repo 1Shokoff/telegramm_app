@@ -36,6 +36,12 @@ class ConsoleBot:
     async def send_message(self, chat_id, text, reply_markup=None):
         print("\n[в Telegram → %s]\n%s\n" % (chat_id, text))
 
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None):
+        print("\n[картинка в Telegram → %s]\n%s\n" % (chat_id, caption or ""))
+
+    async def send_document(self, chat_id, document, caption=None, reply_markup=None):
+        print("\n[файл в Telegram → %s]\n%s\n" % (chat_id, caption or ""))
+
 
 async def main() -> None:
     cfg = load_config()

@@ -134,20 +134,48 @@ def welcome(first_name: str | None, price_rub: int, apps_count: int) -> str:
     ) % (hello, apps_count, money(price_rub))
 
 
-def payment_instructions(order: dict, details: str) -> str:
-    body = e(details) if details else "Реквизиты уточните у продавца."
-    return (
-        "<b>Оплата заказа %s</b>\n"
-        "%s · <b>%s</b>\n\n"
-        "%s\n\n"
+def payment_instructions(order: dict, cfg: Config) -> str:
+    """Реквизиты перевода. Значения — в <code>: в Telegram они копируются нажатием."""
+    lines = [
+        "<b>Оплата заказа %s</b>" % e(order["code"]),
+        "%s · <b>%s</b>" % (
+            e(catalog.product_name(order.get("app_slug"))), money(order["price_rub"])
+        ),
+        "",
+    ]
+
+    rows = cfg.requisites
+    if rows:
+        for row in rows:
+            value = "<code>%s</code>" % e(row["value"]) if row["copy"] else e(row["value"])
+            lines.append("%s: %s" % (e(row["label"]), value))
+        lines.append("")
+        lines.append("<i>Нажмите на значение, чтобы скопировать.</i>")
+    elif cfg.payment_details:
+        lines.append(e(cfg.payment_details))
+    else:
+        lines.append("Реквизиты уточните у продавца.")
+
+    if rows and cfg.payment_details:
+        lines.append("")
+        lines.append(e(cfg.payment_details))
+
+    lines.append("")
+    lines.append(
         "Укажите в комментарии к платежу номер заказа <code>%s</code>, "
-        "затем нажмите «Я оплатил» — продавец подтвердит поступление."
-    ) % (
-        e(order["code"]),
-        e(catalog.product_name(order.get("app_slug"))),
-        money(order["price_rub"]),
-        body,
-        e(order["code"]),
+        "затем нажмите «Я оплатил» — продавец подтвердит поступление." % e(order["code"])
+    )
+    lines.append("")
+    lines.append(
+        "Чек или скриншот перевода можно прислать сюда картинкой или файлом — "
+        "продавец увидит его в заказе."
+    )
+    return "\n".join(lines)
+
+
+def receipt_from_buyer(order: dict, title: str) -> str:
+    return "🧾 <b>Чек по заказу %s</b>\n%s\n\n%s" % (
+        e(order["code"]), user_line(order), e(title)
     )
 
 

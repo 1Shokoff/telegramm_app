@@ -36,8 +36,23 @@ from aiogram import Bot  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
 from aiogram.enums import ParseMode  # noqa: E402
 from aiogram.exceptions import TelegramBadRequest  # noqa: E402
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage, SendPhoto  # noqa: E402
-from aiogram.types import CallbackQuery, Chat, FSInputFile, Message, PhotoSize, Update, User  # noqa: E402
+from aiogram.methods import (  # noqa: E402
+    AnswerCallbackQuery,
+    EditMessageText,
+    SendDocument,
+    SendMessage,
+    SendPhoto,
+)
+from aiogram.types import (  # noqa: E402
+    CallbackQuery,
+    Chat,
+    Document,
+    FSInputFile,
+    Message,
+    PhotoSize,
+    Update,
+    User,
+)
 
 from app import const, db  # noqa: E402
 from app.config import load_config  # noqa: E402
@@ -66,6 +81,8 @@ class StubBot(Bot):
 
     async def __call__(self, method, request_timeout=None):
         self.calls.append(method)
+        if isinstance(method, SendDocument):
+            return make_message(chat_id=method.chat_id, text=method.caption or "", from_bot=True)
         if isinstance(method, SendPhoto):
             if self.reject_photos:
                 raise TelegramBadRequest(method=method, message="Bad Request: wrong file")
@@ -130,6 +147,29 @@ def make_message(chat_id: int, text: str, from_bot: bool = False, photo: list | 
 def message_update(chat_id: int, text: str) -> Update:
     counter["id"] += 1
     return Update(update_id=counter["id"], message=make_message(chat_id, text))
+
+
+def file_update(chat_id: int, *, photo: bool, name: str = "") -> Update:
+    """Покупатель прислал чек: картинкой или файлом."""
+    counter["id"] += 1
+    common = dict(
+        message_id=counter["id"],
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=chat_id, type="private"),
+        from_user=User(id=chat_id, is_bot=False, first_name="Тест", username="user%d" % chat_id),
+    )
+    if photo:
+        message = Message(
+            photo=[PhotoSize(file_id="receipt-photo", file_unique_id="r1", width=1280, height=720)],
+            **common,
+        )
+    else:
+        message = Message(
+            document=Document(file_id="receipt-doc", file_unique_id="r2", file_name=name),
+            **common,
+        )
+    counter["id"] += 1
+    return Update(update_id=counter["id"], message=message)
 
 
 def callback_update(chat_id: int, data: str) -> Update:
@@ -218,6 +258,27 @@ async def main() -> int:
     check("продавец видит заявку", any("заявил оплату" in t for t in bot.texts_to(SELLER)))
 
     print("\nПродавец")
+    bot.reset()
+    await dp.feed_update(bot, file_update(BUYER, photo=True))
+    check(
+        "чек картинкой ушёл продавцу",
+        any(
+            isinstance(m, SendPhoto) and m.chat_id == SELLER and "Чек по заказу" in (m.caption or "")
+            for m in bot.calls
+        ),
+    )
+    check("покупателю подтвердили чек", any("отправлен продавцу" in t for t in bot.texts_to(BUYER)))
+
+    bot.reset()
+    await dp.feed_update(bot, file_update(BUYER, photo=False, name="chek.pdf"))
+    check(
+        "чек файлом ушёл продавцу",
+        any(
+            isinstance(m, SendDocument) and m.chat_id == SELLER and "chek.pdf" in (m.caption or "")
+            for m in bot.calls
+        ),
+    )
+
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "o:payok:%d" % order["id"]))
     order = await db.get_order(order["id"])

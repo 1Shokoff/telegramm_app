@@ -407,6 +407,47 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 .product-desc { color: var(--muted); font-size: 14px; line-height: 1.5; padding-bottom: 12px; }
 
+/* ----------------------------------------------------------- реквизиты */
+
+.requisites { display: flex; flex-direction: column; }
+
+.req-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.req-row:last-child { border-bottom: 0; }
+.req-row.comment { border-top: 1px solid var(--line); border-bottom: 0; }
+
+.req-icon {
+  width: 38px; height: 38px;
+  flex: 0 0 38px;
+  border-radius: 11px;
+  overflow: hidden;
+  background: var(--surface-3);
+  display: grid; place-items: center;
+}
+.req-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.req-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.req-label { color: var(--muted); font-size: 12px; }
+.req-value {
+  font-size: 16px; font-weight: 640; letter-spacing: .2px;
+  overflow-wrap: anywhere;
+}
+
+.req-copy {
+  flex: 0 0 auto;
+  width: 38px; height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.req-copy:active { transform: scale(.92); color: var(--accent); border-color: #c8ff3166; }
+
 /* --------------------------------------------------------------- подвал */
 
 /* Реквизиты и документы — на каждом экране витрины и на каждой странице. */
@@ -833,6 +874,7 @@ a.brand { text-decoration: none; color: inherit; }
     box-shadow: 0 12px 30px #c8ff310f;
   }
   .chip:hover:not(.active) { border-color: #c8ff3166; color: var(--text); }
+  .req-copy:hover { color: var(--accent); border-color: #c8ff3166; background: var(--surface-3); }
   .doc-row:not(.pending):hover .doc-title, .order-line:hover .code { color: var(--accent); }
   .icon-btn:hover { background: var(--surface-2); box-shadow: 0 0 0 1px #c8ff3140; }
   .btn-secondary:hover, .btn-danger:hover { border-color: #c8ff3166; }

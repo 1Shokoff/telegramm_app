@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="СБП">
+  <title>СБП</title>
+  <rect width="40" height="40" rx="11" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="39" height="39" rx="10.5" fill="none" stroke="#00000014"/>
+  <polygon points="5,11 10,11 16,20 10,29 5,29 11,20" fill="#1F87C9"/>
+  <polygon points="13,11 18,11 24,20 18,29 13,29 19,20" fill="#5CB247"/>
+  <polygon points="21,11 26,11 32,20 26,29 21,29 27,20" fill="#F0721E"/>
+</svg>

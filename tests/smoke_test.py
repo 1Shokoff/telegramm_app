@@ -25,7 +25,11 @@ os.environ.update(
         "SELLER_IDS": str(SELLER),
         "WEBAPP_URL": "https://example.com",
         "PAYMENT_MODE": "manual",
-        "PAYMENT_DETAILS": "СБП: +7 900 000-00-00\\nПолучатель: Тест",
+        "PAYMENT_DETAILS": "Переводите только по СБП",
+        "PAY_PHONE": "+7 900 000-00-00",
+        "PAY_BANK": "Сбербанк",
+        "PAY_NAME": "Тестов Т. Т.",
+        "PAY_CARD": "2202 2000 0000 0000",
         "INSTRUCTION_TEMPLATE": "Шаг 1\\nШаг 2",
         "PRICE_RUB": "3000",
         "ORDER_PREFIX": "NP",
@@ -40,6 +44,7 @@ os.environ.update(
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
 from app import auth, const, db, udid as udid_mod  # noqa: E402
@@ -65,9 +70,18 @@ class FakeBot:
 
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
+        self.files: list[tuple[int, str, str]] = []
 
     async def send_message(self, chat_id, text, reply_markup=None):
         self.sent.append((chat_id, text))
+        return None
+
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None):
+        self.files.append((chat_id, "photo", caption or ""))
+        return None
+
+    async def send_document(self, chat_id, document, caption=None, reply_markup=None):
+        self.files.append((chat_id, "document", caption or ""))
         return None
 
     def to(self, chat_id: int) -> list[str]:
@@ -389,6 +403,28 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         check("UDID до оплаты — 400", res.status == 400)
 
+        # Чек об оплате: файл уходит продавцу и отмечается в переписке заказа.
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+            "890000000a49444154789c6360000002000100ff03d20000000049454e44ae426082"
+        )
+        form = FormData()
+        form.add_field("file", png, filename="chek.png", content_type="image/png")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        check("чек принят витриной", res.status == 200, await res.text())
+        messages = await db.list_messages(order["id"])
+        check("чек отмечен в переписке заказа",
+              any("Чек об оплате" in m["text"] for m in messages))
+
+        form = FormData()
+        form.add_field("file", b"MZ", filename="virus.exe", content_type="application/x-msdownload")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        check("чужой тип файла отклонён", res.status == 400)
+
         res = await client.post("/api/order/claim", headers=buyer_headers, json={"orderId": order["id"]})
         check("оплата заявлена", (await res.json())["order"]["status"] == const.PAYMENT_CHECK)
 
@@ -444,8 +480,9 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
 
         res = await client.get("/api/chat?orderId=%d" % order["id"], headers=seller_headers)
         data = await res.json()
-        check("продавец видит переписку", data["role"] == "seller" and len(data["messages"]) == 1)
-        check("чужое сообщение помечено верно", data["messages"][0]["mine"] is False)
+        hello = [m for m in data["messages"] if m["text"] == "Здравствуйте!"]
+        check("продавец видит переписку", data["role"] == "seller" and len(hello) == 1)
+        check("чужое сообщение помечено верно", hello[0]["mine"] is False)
 
         res = await client.post(
             "/api/chat", headers=seller_headers,
@@ -454,7 +491,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("продавец ответил", (await res.json())["message"]["mine"] is True)
 
         res = await client.get("/api/chat?orderId=%d" % order["id"], headers=buyer_headers)
-        check("покупатель видит оба сообщения", len((await res.json())["messages"]) == 2)
+        texts_seen = [m["text"] for m in (await res.json())["messages"]]
+        check("покупатель видит оба сообщения",
+              "Здравствуйте!" in texts_seen and "Добрый день, уже делаем" in texts_seen,
+              str(texts_seen))
 
         res = await client.post(
             "/api/chat", headers=buyer_headers, json={"orderId": 999999, "text": "чужой заказ"}
@@ -558,7 +598,14 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
 async def main() -> int:
     cfg = load_config()
     check("режим оплаты из .env", cfg.payment_mode == "manual")
-    check("перенос строки в реквизитах", "\n" in cfg.payment_details)
+
+    rows = {row["key"]: row for row in cfg.requisites}
+    check("реквизиты перевода разобраны",
+          list(rows) == ["phone", "bank", "name", "card"], str(list(rows)))
+    check("телефон копируется, банк — нет",
+          rows["phone"]["copy"] is True and rows["bank"]["copy"] is False)
+    check("иконка банка найдена по названию", rows["bank"]["icon"] == "sber", rows["bank"]["icon"])
+    check("иконка СБП у телефона", rows["phone"]["icon"] == "sbp")
     check("шаблон инструкции разобран", "\n" in cfg.instruction_template)
 
     tmp = tempfile.mkdtemp()

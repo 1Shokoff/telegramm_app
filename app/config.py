@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import const
+from . import catalog, const
 
 PAYMENT_MODES = ("manual", "demo", "stars")
 
@@ -78,6 +78,11 @@ class Config:
     product_subtitle: str
     payment_mode: str
     payment_details: str
+    pay_phone: str
+    pay_bank: str
+    pay_bank_icon: str
+    pay_card: str
+    pay_name: str
     instruction_template: str
     telegram_proxy: str
     bot_username: str
@@ -108,6 +113,38 @@ class Config:
 
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
+
+    @property
+    def requisites(self) -> tuple[dict, ...]:
+        """Реквизиты перевода строками: подпись, значение, иконка, копировать ли.
+
+        Порядок такой же, как в витрине и в сообщении бота, чтобы покупатель
+        видел одно и то же в обоих местах.
+        """
+        rows: list[dict] = []
+        if self.pay_phone:
+            rows.append({
+                "key": "phone", "label": "Телефон для СБП",
+                "value": self.pay_phone, "icon": "sbp", "copy": True,
+            })
+        if self.pay_bank:
+            rows.append({
+                "key": "bank", "label": "Банк получателя",
+                "value": self.pay_bank,
+                "icon": self.pay_bank_icon or catalog.bank_icon(self.pay_bank),
+                "copy": False,
+            })
+        if self.pay_name:
+            rows.append({
+                "key": "name", "label": "Получатель",
+                "value": self.pay_name, "icon": "", "copy": True,
+            })
+        if self.pay_card:
+            rows.append({
+                "key": "card", "label": "Номер карты",
+                "value": self.pay_card, "icon": "", "copy": True,
+            })
+        return tuple(rows)
 
     def doc_path(self, key: str) -> str:
         """Адрес документа внутри витрины: свой текст или ссылка из .env."""
@@ -173,6 +210,11 @@ def load_config() -> Config:
         product_subtitle=_s("PRODUCT_SUBTITLE", "Весь каталог приложений"),
         payment_mode=mode,
         payment_details=_multiline("PAYMENT_DETAILS"),
+        pay_phone=_s("PAY_PHONE"),
+        pay_bank=_s("PAY_BANK"),
+        pay_bank_icon=_s("PAY_BANK_ICON"),
+        pay_card=_s("PAY_CARD"),
+        pay_name=_s("PAY_NAME"),
         instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
         telegram_proxy=proxy,
         bot_username=_s("BOT_USERNAME").lstrip("@"),

@@ -276,6 +276,44 @@ class OrderService:
 
     MESSAGE_LIMIT = 2000
 
+    async def attach_receipt(
+        self, order_id: int, actor_id: int, file, *, is_photo: bool, title: str
+    ) -> dict:
+        """Чек об оплате от покупателя: уходит продавцу и отмечается в заказе.
+
+        Файл не храним у себя: из бота пересылаем по file_id, из Mini App —
+        отдаём Telegram байтами. Хранилище чеков — переписка продавца.
+        """
+        order = await self._load(order_id)
+        if order["user_id"] != actor_id:
+            raise ServiceError("Это не ваш заказ.")
+        if order["status"] not in const.OPEN_STATUSES:
+            raise ServiceError("Заказ закрыт — чек уже не нужен.")
+
+        full = await self._with_user(order)
+        caption = texts.receipt_from_buyer(full, title)
+        kb = keyboards.seller_order_kb(order)
+        sent = 0
+        for seller_id in self.cfg.seller_ids:
+            if not await self.allowed(seller_id, const.NOTIFY_CHAT, order_id):
+                continue
+            try:
+                if is_photo:
+                    await self.bot.send_photo(seller_id, file, caption=caption, reply_markup=kb)
+                else:
+                    await self.bot.send_document(seller_id, file, caption=caption, reply_markup=kb)
+                sent += 1
+            except TelegramForbiddenError:
+                await db.set_blocked(seller_id, True)
+            except TelegramBadRequest as exc:
+                log.warning("Не отправили чек продавцу %s: %s", seller_id, exc)
+
+        await db.add_message(order_id, db.BUYER, actor_id, "🧾 Чек об оплате: %s" % title)
+        await db.add_event(order_id, "user:%d" % actor_id, "receipt", title)
+        if not sent:
+            log.warning("Чек по заказу %s никому не доставлен", order["code"])
+        return order
+
     async def post_message(
         self, order_id: int, text: str, author_id: int, from_seller: bool
     ) -> dict:

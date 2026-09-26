@@ -288,7 +288,7 @@ async def nav_buy_confirm(call: CallbackQuery, cfg: Config, service: OrderServic
 
     if cfg.payment_mode == "manual":
         await call.message.answer(
-            texts.payment_instructions(order, cfg.payment_details),
+            texts.payment_instructions(order, cfg),
             reply_markup=keyboards.payment_kb(order["id"], cfg.payment_mode),
         )
     elif cfg.payment_mode == "demo":
@@ -405,6 +405,44 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
     )
     await call.message.answer("Запрос по заказу <b>%s</b> отправлен.\n%s" % (texts.e(order["code"]), contact))
     await call.answer()
+
+
+# ------------------------------------------------------------------ чек об оплате
+
+
+async def _receipt(message: Message, cfg: Config, service: OrderService, file, is_photo: bool, title: str) -> None:
+    await _remember(message)
+    order = await db.get_active_order(message.from_user.id)
+    if not order or order["status"] not in const.OPEN_STATUSES:
+        await message.answer("Открытого заказа нет. Оформите заказ — и присылайте чек сюда.")
+        return
+    try:
+        await service.attach_receipt(
+            order["id"], message.from_user.id, file, is_photo=is_photo, title=title
+        )
+    except ServiceError as exc:
+        await message.answer(texts.e(str(exc)))
+        return
+    await message.answer(
+        "Чек по заказу <b>%s</b> отправлен продавцу." % texts.e(order["code"]),
+        reply_markup=keyboards.buyer_order_kb(cfg, order),
+    )
+
+
+@router.message(F.photo)
+async def receipt_photo(message: Message, cfg: Config, service: OrderService) -> None:
+    photo = message.photo[-1]
+    await _receipt(
+        message, cfg, service, photo.file_id, True, message.caption or "скриншот перевода"
+    )
+
+
+@router.message(F.document)
+async def receipt_document(message: Message, cfg: Config, service: OrderService) -> None:
+    await _receipt(
+        message, cfg, service, message.document.file_id, False,
+        message.document.file_name or message.caption or "файл",
+    )
 
 
 # ------------------------------------------------------------------- UDID текстом
