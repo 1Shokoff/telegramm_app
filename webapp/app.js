@@ -595,26 +595,55 @@ function chatButton(label) {
 
 /* ---------------------------------------------------------- инструкция */
 
-/* Слайд шага уже содержит номер, заголовок и подсказку — дублировать их
-   рядом незачем. Тот же текст доступен списком в раскрывающемся блоке. */
-function instructionStep(step) {
+/* Упоминания ботов в тексте делаем ссылками: покупателю не нужно искать
+   их вручную. Текст берётся из нашего же шаблона, поэтому подстановка
+   безопасна — экранируем до разбора. */
+function withBotLinks(text) {
+  return esc(text).replace(/@([A-Za-z0-9_]{4,32})/g, (match, name) => (
+    '<a class="instr-mention" href="https://t.me/' + name + '" data-action="bot:' + name + '">' +
+    match + '</a>'
+  ));
+}
+
+function chatLine(line) {
+  if (line.kind === 'button') {
+    return '<div class="mock-btn">' + esc(line.text) + '</div>';
+  }
+  if (line.kind === 'file') {
+    return (
+      '<div class="mock-file' + (line.mine ? ' mine' : '') + '">' +
+        '<span class="mock-file-icon">📄</span>' +
+        '<span class="mock-file-text"><span class="mock-file-name">' + esc(line.text) + '</span>' +
+        '<span class="mock-file-meta">' + esc(line.meta) + '</span></span>' +
+      '</div>'
+    );
+  }
   return (
-    '<li class="instr-step">' +
-      '<img class="instr-shot" src="' + esc(step.image) + '" loading="lazy" ' +
-        'alt="Шаг ' + step.number + ' из 10: ' + esc(step.title) + '. ' + esc(step.subtitle) + '">' +
-    '</li>'
+    '<div class="mock-msg' + (line.kind === 'user' ? ' mine' : '') + '">' +
+      esc(line.text) +
+    '</div>'
   );
 }
 
-function instructionTextStep(step) {
+function instructionStep(step, total) {
   return (
-    '<li class="instr-line">' +
-      '<span class="instr-num">' + step.number + '</span>' +
-      '<span class="instr-text">' +
-        '<span class="instr-title">' + esc(step.title) + '</span>' +
-        '<span class="instr-sub">' + esc(step.subtitle) + '</span>' +
-        '<span class="instr-hint-line">' + esc(step.hint) + '</span>' +
-      '</span>' +
+    '<li class="instr-card">' +
+      '<div class="instr-card-top">' +
+        '<span class="instr-brand">iApki</span>' +
+        '<span class="instr-count">' + ('0' + step.number).slice(-2) + ' / ' + total + '</span>' +
+      '</div>' +
+      '<div class="instr-head">' +
+        '<span class="instr-num">' + ('0' + step.number).slice(-2) + '</span>' +
+        '<span class="instr-text">' +
+          '<span class="instr-title">' + esc(step.title) + '</span>' +
+          '<span class="instr-sub">' + withBotLinks(step.subtitle) + '</span>' +
+        '</span>' +
+      '</div>' +
+      '<div class="mock">' +
+        '<div class="mock-top">' + esc(step.bot) + ' <span class="mock-bot">бот</span></div>' +
+        '<div class="mock-body">' + step.chat.map(chatLine).join('') + '</div>' +
+      '</div>' +
+      '<div class="instr-hint">' + withBotLinks(step.hint) + '</div>' +
     '</li>'
   );
 }
@@ -624,10 +653,11 @@ function instructionBlock(order) {
   if (!data.steps.length) return '';
 
   const bots = data.bots.map((bot) => (
-    '<button type="button" class="instr-bot" data-action="bot:' + esc(bot.username) + '">' +
+    '<a class="instr-bot" href="' + esc(bot.url) + '" data-action="bot:' + esc(bot.username) + '">' +
       '<span class="instr-bot-name">@' + esc(bot.username) + '</span>' +
       '<span class="instr-bot-hint">' + esc(bot.hint) + '</span>' +
-    '</button>'
+      '<span class="instr-bot-go">↗</span>' +
+    '</a>'
   )).join('');
 
   return (
@@ -643,10 +673,10 @@ function instructionBlock(order) {
             '<span class="req-value mono">' + esc(order.udidMasked) + '</span>' +
           '</span></div>'
         : '') +
-      '<ol class="instr-steps">' + data.steps.map(instructionStep).join('') + '</ol>' +
-      '<details class="disclosure"><summary>Шаги текстом</summary>' +
-        '<ol class="instr-lines">' + data.steps.map(instructionTextStep).join('') + '</ol>' +
-      '</details>' +
+      '<div class="instr-swipe">Листайте шаги вбок →</div>' +
+      '<ol class="instr-steps">' +
+        data.steps.map((step) => instructionStep(step, data.steps.length)).join('') +
+      '</ol>' +
       (order.instruction
         ? '<div class="instr-note">' +
             '<div class="instr-note-title">Примечание продавца</div>' +
@@ -1095,11 +1125,15 @@ function updateBackButton() {
 /* Ряды фильтров прокручиваются вбок. На телефоне это делает палец,
    а на компьютере колесо мыши крутит страницу, и часть ряда недостижима —
    поэтому колесо над рядом двигаем его сами, плюс даём тащить мышью. */
-function bindScrollX(el) {
+function bindScrollX(el, wheelVertical) {
   el.addEventListener('wheel', (event) => {
     const max = el.scrollWidth - el.clientWidth;
     if (max <= 1) return;
-    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    // Высокая лента (карточки инструкции) не должна перехватывать обычную
+    // прокрутку страницы — только боковую, с трекпада.
+    if (!sideways && wheelVertical === false) return;
+    const delta = sideways ? event.deltaX : event.deltaY;
     if (!delta) return;
     // На краю ряда колесо возвращается странице — иначе прокрутка упирается.
     if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
@@ -1149,7 +1183,8 @@ function bindScrollX(el) {
 }
 
 function bindInputs() {
-  document.querySelectorAll('.filters, .stepper').forEach(bindScrollX);
+  document.querySelectorAll('.filters, .stepper').forEach((el) => bindScrollX(el));
+  document.querySelectorAll('.instr-steps').forEach((el) => bindScrollX(el, false));
 
   const udid = document.getElementById('udidInput');
   if (udid) {
@@ -1599,6 +1634,9 @@ function handleAction(raw) {
 document.addEventListener('click', (event) => {
   const target = event.target.closest('[data-action]');
   if (!target || target.disabled) return;
+  // Ссылку открываем сами: внутри Telegram это делает openTelegramLink,
+  // а href остаётся на случай, если скрипт не сработал.
+  if (target.tagName === 'A') event.preventDefault();
   handleAction(target.getAttribute('data-action'));
 });
 

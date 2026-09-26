@@ -452,47 +452,138 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 .instr-bots { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
 .instr-bot {
-  display: flex; flex-direction: column; gap: 3px;
+  display: flex; align-items: center; gap: 12px;
   width: 100%;
   padding: 13px 14px;
   border-radius: var(--radius-m);
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text);
-  font-family: inherit; text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
 .instr-bot-name { font-weight: 660; font-size: 15px; color: var(--accent); }
 :root[data-theme="light"] .instr-bot-name { color: #486500; }
-.instr-bot-hint { color: var(--muted); font-size: 13px; }
+.instr-bot-hint { color: var(--muted); font-size: 13px; flex: 1; }
+.instr-bot-go { color: var(--muted); font-size: 15px; }
 .instr-bot:active { transform: scale(.98); }
 
-.instr-steps { list-style: none; margin: 16px 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.instr-mention { color: var(--accent); text-decoration: none; border-bottom: 1px solid #c8ff3155; }
+:root[data-theme="light"] .instr-mention { color: #486500; }
 
-.instr-lines { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-.instr-line { display: flex; align-items: flex-start; gap: 12px; }
-.instr-hint-line { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.instr-swipe { color: var(--muted); font-size: 12px; margin: 16px 0 8px; }
+
+/* Лента шагов: листается пальцем, колесом мыши и перетаскиванием. */
+.instr-steps {
+  list-style: none;
+  margin: 0 calc(-1 * var(--pad));
+  padding: 4px var(--pad) 14px;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.instr-steps::-webkit-scrollbar { display: none; }
+
+.instr-card {
+  flex: 0 0 min(300px, 84%);
+  scroll-snap-align: center;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  padding: 16px;
+}
+
+.instr-card-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.instr-brand { font-weight: 800; letter-spacing: -0.5px; }
+.instr-count { color: var(--accent); font-size: 12px; font-weight: 700; }
+:root[data-theme="light"] .instr-count { color: #486500; }
+
+.instr-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
 .instr-num {
-  flex: 0 0 30px;
-  width: 30px; height: 30px;
-  border-radius: 10px;
+  flex: 0 0 28px;
+  width: 28px; height: 28px;
+  border-radius: 9px;
   background: var(--accent);
   color: var(--accent-text);
   display: grid; place-items: center;
-  font-weight: 800; font-size: 14px;
+  font-weight: 800; font-size: 13px;
 }
-.instr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.instr-title { font-size: 16px; font-weight: 660; letter-spacing: -0.2px; }
-.instr-sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.instr-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.instr-title { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+.instr-sub { color: var(--muted); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 
-/* Слайд шага: вертикальный кадр, поэтому ограничиваем ширину. */
-.instr-shot {
-  display: block;
-  width: 100%;
-  max-width: 380px;
-  margin: 0 auto;
+/* Макет переписки: не скриншот, а те же сообщения версткой. */
+.mock {
+  flex: 1;
   border-radius: var(--radius-m);
   border: 1px solid var(--line);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.mock-top {
+  padding: 8px 12px;
+  font-size: 12px; font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+.mock-bot { color: var(--muted); font-weight: 500; }
+.mock-body { display: flex; flex-direction: column; gap: 7px; padding: 12px; }
+
+.mock-msg {
+  align-self: flex-start;
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: 13px 13px 13px 4px;
+  background: var(--surface-3);
+  font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mock-msg.mine {
+  align-self: flex-end;
+  border-radius: 13px 13px 4px 13px;
+  background: linear-gradient(135deg, #c8ff3133, #c8ff3114);
+  border: 1px solid #c8ff3140;
+}
+
+.mock-btn {
+  align-self: stretch;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  font-size: 12px; font-weight: 600;
+  color: var(--text);
+}
+
+.mock-file {
+  align-self: flex-start;
+  display: flex; align-items: center; gap: 9px;
+  max-width: 92%;
+  padding: 8px 11px;
+  border-radius: 13px;
+  background: var(--surface-3);
+}
+.mock-file.mine { align-self: flex-end; background: #c8ff3126; border: 1px solid #c8ff3140; }
+.mock-file-icon { font-size: 16px; }
+.mock-file-text { display: flex; flex-direction: column; min-width: 0; }
+.mock-file-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.mock-file-meta { font-size: 11px; color: var(--muted); }
+
+.instr-hint {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .instr-note {

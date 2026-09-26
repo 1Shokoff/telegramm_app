@@ -381,8 +381,11 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
 
         steps = data["instruction"]["steps"]
         check("шаблон инструкции отдаётся витрине", len(steps) == 10, str(len(steps)))
-        check("у шагов есть картинки",
-              all(s["image"].startswith("/static/img/instruction/") for s in steps))
+        check("шаги собраны из данных, а не картинок",
+              all(s["chat"] and s["title"] and s["hint"] for s in steps))
+        check("в макете переписки есть кнопки и файлы",
+              any(line["kind"] == "button" for s in steps for line in s["chat"])
+              and any(line["kind"] == "file" for s in steps for line in s["chat"]))
         check("в шаблоне два бота",
               [b["username"] for b in data["instruction"]["bots"]] == ["iRegerBot", "isignerbot"])
 
