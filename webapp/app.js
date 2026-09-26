@@ -286,8 +286,10 @@ function viewPayment(order) {
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' + esc(order.priceText) + '</p>' +
     '<div class="card">' +
       (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
-      action +
+      // Сначала чек, потом «Я оплатил»: так покупатель прикладывает
+      // подтверждение до того, как заявит оплату.
       (mode === 'manual' ? receiptBlock() : '') +
+      action +
     '</div>' +
     '<button class="btn btn-danger btn-sm" data-action="order-cancel">Отменить заказ</button>'
   );
@@ -305,10 +307,28 @@ function paymentDetails(order) {
       (b.payment.details
         ? '<div class="body" style="white-space:pre-wrap">' + esc(b.payment.details) + '</div>'
         : '<div class="body">Реквизиты уточните у продавца.</div>') +
+      '<div class="requisites">' + amountRow(order) + '</div>' +
       paymentComment(order)
     );
   }
-  return '<div class="requisites">' + rows.map(requisiteRow).join('') + '</div>' + note + paymentComment(order);
+  return (
+    '<div class="requisites">' + rows.map(requisiteRow).join('') + amountRow(order) + '</div>' +
+    note + paymentComment(order)
+  );
+}
+
+function amountRow(order) {
+  // Сумма из .env важнее цены заказа: продавец может попросить другую.
+  const text = (state.boot.payment && state.boot.payment.amount) || order.priceText;
+  return (
+    '<div class="req-row">' +
+      '<span class="req-text">' +
+        '<span class="req-label">Сумма к оплате</span>' +
+        '<span class="req-value">' + esc(text) + '</span>' +
+      '</span>' +
+      copyButton('amount', 'сумму') +
+    '</div>'
+  );
 }
 
 function paymentComment(order) {
@@ -1169,9 +1189,20 @@ function copyFallback(text) {
 
 function copyValue(key) {
   const order = state.boot && state.boot.order;
-  const rows = (state.boot && state.boot.payment && state.boot.payment.requisites) || [];
-  const row = rows.find((r) => r.key === key);
-  const text = key === 'code' ? (order && order.code) : (row && row.value);
+  const payment = (state.boot && state.boot.payment) || {};
+  const rows = payment.requisites || [];
+
+  let text = '';
+  if (key === 'code') {
+    text = order && order.code;
+  } else if (key === 'amount') {
+    // В банк удобнее вставлять голое число, без пробелов и знака рубля.
+    const shown = payment.amount || (order && order.priceText) || '';
+    text = shown.replace(/[^\d.,]/g, '') || shown;
+  } else {
+    const row = rows.find((r) => r.key === key);
+    text = row && row.value;
+  }
   if (!text) return;
 
   const done = () => toast('Скопировано');

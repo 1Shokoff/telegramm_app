@@ -83,6 +83,7 @@ class Config:
     pay_bank_icon: str
     pay_card: str
     pay_name: str
+    pay_amount: str
     instruction_template: str
     telegram_proxy: str
     bot_username: str
@@ -113,6 +114,12 @@ class Config:
 
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
+
+    def amount_text(self, price_rub: int) -> str:
+        """Сумма к переводу: значение из .env важнее цены заказа."""
+        if self.pay_amount:
+            return self.pay_amount
+        return "{:,} ₽".format(price_rub).replace(",", " ")
 
     @property
     def requisites(self) -> tuple[dict, ...]:
@@ -215,6 +222,7 @@ def load_config() -> Config:
         pay_bank_icon=_s("PAY_BANK_ICON"),
         pay_card=_s("PAY_CARD"),
         pay_name=_s("PAY_NAME"),
+        pay_amount=_s("PAY_AMOUNT"),
         instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
         telegram_proxy=proxy,
         bot_username=_s("BOT_USERNAME").lstrip("@"),

@@ -149,16 +149,20 @@ def payment_instructions(order: dict, cfg: Config) -> str:
         for row in rows:
             value = "<code>%s</code>" % e(row["value"]) if row["copy"] else e(row["value"])
             lines.append("%s: %s" % (e(row["label"]), value))
-        lines.append("")
-        lines.append("<i>Нажмите на значение, чтобы скопировать.</i>")
     elif cfg.payment_details:
         lines.append(e(cfg.payment_details))
     else:
         lines.append("Реквизиты уточните у продавца.")
 
-    if rows and cfg.payment_details:
+    # Сумму показываем всегда: она известна и без заполненных реквизитов.
+    lines.append("Сумма к оплате: <code>%s</code>" % e(cfg.amount_text(order["price_rub"])))
+
+    if rows:
         lines.append("")
-        lines.append(e(cfg.payment_details))
+        lines.append("<i>Нажмите на значение, чтобы скопировать.</i>")
+        if cfg.payment_details:
+            lines.append("")
+            lines.append(e(cfg.payment_details))
 
     lines.append("")
     lines.append(

@@ -1,8 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="СБП">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="СБП">
   <title>СБП</title>
-  <rect width="40" height="40" rx="11" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="39" height="39" rx="10.5" fill="none" stroke="#00000014"/>
-  <polygon points="5,11 10,11 16,20 10,29 5,29 11,20" fill="#1F87C9"/>
-  <polygon points="13,11 18,11 24,20 18,29 13,29 19,20" fill="#5CB247"/>
-  <polygon points="21,11 26,11 32,20 26,29 21,29 27,20" fill="#F0721E"/>
+  <rect width="512" height="512" rx="112" fill="#ffffff"/>
+  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="#00000014" stroke-width="2"/>
+  <!-- Знак из официального логотипа НСПК: сама надпись «Система быстрых
+       платежей» в иконку не помещается, поэтому оставлен только знак. -->
+  <g transform="translate(126 106) scale(0.752)">
+    <path fill="#8F4794" d="M100.3,199.4l-52,30L0,313.1l196.9-113.7L100.3,199.4z"/>
+    <path fill="#E40646" d="M248.9,113.7l-52,30l-48.3,83.7l196.9-113.7L248.9,113.7z"/>
+    <polygon fill="#F9B429" points="196.9,83.7 148.6,0 148.6,171.5 148.6,227.4 148.6,398.9 196.9,315.2"/>
+    <polygon fill="#EF8019" points="148.6,0 196.9,83.7 248.9,113.7 345.5,113.7"/>
+    <polygon fill="#78B72A" points="148.6,171.5 148.6,398.9 196.9,315.2 196.9,255.2"/>
+    <path fill="#00853F" d="M248.9,285.2l-52,30l-48.3,83.7l196.9-113.7L248.9,285.2z"/>
+    <polygon fill="#5B57A2" points="0,85.8 0,313.1 48.3,229.5 48.3,169.4"/>
+    <polygon fill="#0698D6" points="148.6,171.5 148.7,171.6 0,85.8 48.3,169.4 248.9,285.2 345.5,285.2"/>
+  </g>
 </svg>

@@ -248,7 +248,9 @@ async def main() -> int:
     await dp.feed_update(bot, callback_update(BUYER, "nav:buy_confirm"))
     order = await db.get_active_order(BUYER)
     check("заказ создан кнопкой", order is not None and order["status"] == const.NEW)
-    check("реквизиты показаны", any("Оплата заказа" in t for t in bot.texts_to(BUYER)))
+    payment_text = "\n".join(bot.texts_to(BUYER))
+    check("реквизиты показаны", "Оплата заказа" in payment_text)
+    check("сумма к оплате в реквизитах", "Сумма к оплате" in payment_text, payment_text[:160])
     check("продавцу пришло уведомление", any("Новый заказ" in t for t in bot.texts_to(SELLER)))
 
     bot.reset()

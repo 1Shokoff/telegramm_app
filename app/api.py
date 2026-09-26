@@ -219,6 +219,8 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "details": cfg.payment_details,
                 "stars": cfg.price_stars,
                 "requisites": requisites_public(cfg),
+                # Пусто — витрина покажет цену заказа.
+                "amount": cfg.pay_amount,
             },
             "catalog": [
                 dict(item, priceText=texts.money(item["price"]))

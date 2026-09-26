@@ -606,6 +606,7 @@ async def main() -> int:
           rows["phone"]["copy"] is True and rows["bank"]["copy"] is False)
     check("иконка банка найдена по названию", rows["bank"]["icon"] == "sber", rows["bank"]["icon"])
     check("иконка СБП у телефона", rows["phone"]["icon"] == "sbp")
+    check("сумма к переводу берётся из цены заказа", cfg.amount_text(3000) == "3 000 ₽")
     check("шаблон инструкции разобран", "\n" in cfg.instruction_template)
 
     tmp = tempfile.mkdtemp()
