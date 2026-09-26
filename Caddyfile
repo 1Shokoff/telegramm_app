@@ -1,3 +1,13 @@
+{
+	servers {
+		# HTTP/3 наружу не выставлен: в docker-compose.yml открыт только
+		# TCP 443, UDP нет. Без этой строки Caddy всё равно рекламировал бы
+		# h3 заголовком alt-svc, и клиент за VPN или строгим фаерволом
+		# сначала молча пытался бы достучаться по QUIC.
+		protocols h1 h2
+	}
+}
+
 {$DOMAIN} {
 	encode gzip zstd
 
