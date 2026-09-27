@@ -648,6 +648,17 @@ function instructionStep(step, total) {
   );
 }
 
+/* Стрелки для мыши: пальцем и перетаскиванием лента листается сама,
+   но обычным колесом карточку не сменить. */
+function scrollSteps(direction) {
+  const list = document.querySelector('.instr-steps');
+  if (!list) return;
+  const card = list.querySelector('.instr-card');
+  const gap = 12;
+  const step = card ? card.offsetWidth + gap : list.clientWidth;
+  list.scrollBy({ left: direction * step, behavior: 'smooth' });
+}
+
 function instructionBlock(order) {
   const data = (state.boot && state.boot.instruction) || { steps: [], bots: [] };
   if (!data.steps.length) return '';
@@ -673,7 +684,15 @@ function instructionBlock(order) {
             '<span class="req-value mono">' + esc(order.udidMasked) + '</span>' +
           '</span></div>'
         : '') +
-      '<div class="instr-swipe">Листайте шаги вбок →</div>' +
+      '<div class="instr-swipe">' +
+        '<span>Листайте шаги вбок</span>' +
+        '<span class="instr-arrows">' +
+          '<button type="button" class="instr-arrow" data-action="instr-prev" ' +
+            'aria-label="Предыдущий шаг">‹</button>' +
+          '<button type="button" class="instr-arrow" data-action="instr-next" ' +
+            'aria-label="Следующий шаг">›</button>' +
+        '</span>' +
+      '</div>' +
       '<ol class="instr-steps">' +
         data.steps.map((step) => instructionStep(step, data.steps.length)).join('') +
       '</ol>' +
@@ -694,7 +713,7 @@ function viewOrderStatus(order) {
     const cls = step > n ? 'tl done' : (step === n ? 'tl active' : 'tl pending');
     const mark = step > n ? '✓' : String(n);
     // Последний шаг после отправки объясняет, где искать саму инструкцию.
-    const sub = n === 4 && order.instructionReady ? 'Инструкция со скриншотами — ниже' : pair[1];
+    const sub = n === 4 && order.instructionReady ? 'Инструкция ниже: листайте шаги' : pair[1];
     return (
       '<div class="' + cls + '"><div class="dot">' + mark + '</div>' +
       '<div><div class="t">' + esc(pair[0]) + '</div>' +
@@ -1405,6 +1424,9 @@ const actions = {
     toast('Заказ ' + data.order.code + ' создан');
     render();
   }),
+
+  'instr-prev': () => scrollSteps(-1),
+  'instr-next': () => scrollSteps(1),
 
   'receipt-pick': () => {
     const input = document.getElementById('receiptFile');
