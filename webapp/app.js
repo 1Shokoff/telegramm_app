@@ -605,45 +605,32 @@ function withBotLinks(text) {
   ));
 }
 
-function chatLine(line) {
-  if (line.kind === 'button') {
-    return '<div class="mock-btn">' + esc(line.text) + '</div>';
-  }
-  if (line.kind === 'file') {
-    return (
-      '<div class="mock-file' + (line.mine ? ' mine' : '') + '">' +
-        '<span class="mock-file-icon">📄</span>' +
-        '<span class="mock-file-text"><span class="mock-file-name">' + esc(line.text) + '</span>' +
-        '<span class="mock-file-meta">' + esc(line.meta) + '</span></span>' +
-      '</div>'
-    );
-  }
-  return (
-    '<div class="mock-msg' + (line.kind === 'user' ? ' mine' : '') + '">' +
-      esc(line.text) +
-    '</div>'
-  );
-}
-
+/* Карточка шага повторяет слайд инструкции: шапка со счётчиком, номер,
+   заголовок, кадр переписки, подпись и полоса пройденных шагов. */
 function instructionStep(step, total) {
+  const num = ('0' + step.number).slice(-2);
+  const dots = [];
+  for (let i = 1; i <= total; i++) {
+    dots.push('<span class="instr-tick' + (i <= step.number ? ' on' : '') + '"></span>');
+  }
   return (
     '<li class="instr-card">' +
       '<div class="instr-card-top">' +
-        '<span class="instr-brand">iApki</span>' +
-        '<span class="instr-count">' + ('0' + step.number).slice(-2) + ' / ' + total + '</span>' +
+        '<span class="instr-logo">iApki</span>' +
+        '<span class="instr-count">' + num + ' / ' + total + '</span>' +
       '</div>' +
       '<div class="instr-head">' +
-        '<span class="instr-num">' + ('0' + step.number).slice(-2) + '</span>' +
-        '<span class="instr-text">' +
-          '<span class="instr-title">' + esc(step.title) + '</span>' +
-          '<span class="instr-sub">' + withBotLinks(step.subtitle) + '</span>' +
-        '</span>' +
+        '<span class="instr-num">' + num + '</span>' +
+        '<span class="instr-title">' + esc(step.title) + '</span>' +
       '</div>' +
-      '<div class="mock">' +
-        '<div class="mock-top">' + esc(step.bot) + ' <span class="mock-bot">бот</span></div>' +
-        '<div class="mock-body">' + step.chat.map(chatLine).join('') + '</div>' +
+      '<div class="instr-sub">' + withBotLinks(step.subtitle) + '</div>' +
+      '<div class="instr-shot">' +
+        '<img src="' + esc(step.image) + '" loading="lazy" alt="Шаг ' + step.number +
+          ' из ' + total + ': ' + esc(step.title) + '">' +
       '</div>' +
       '<div class="instr-hint">' + withBotLinks(step.hint) + '</div>' +
+      '<div class="instr-sign">@iApkibot</div>' +
+      '<div class="instr-ticks">' + dots.join('') + '</div>' +
     '</li>'
   );
 }

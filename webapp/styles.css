@@ -450,6 +450,18 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 /* ---------------------------------------------------------- инструкция */
 
+/* Цвета взяты с присланных слайдов, поэтому заданы явно, а не переменными
+   темы: карточка должна выглядеть одинаково в светлой и тёмной теме. */
+.instr {
+  --slide-bg: #090e0b;
+  --slide-green: #c6ff55;
+  --slide-text: #f6f8f5;
+  --slide-muted: #b1bab0;
+  --slide-line: #303b2b;
+  --slide-frame: #5f7c3a;
+  --slide-off: #2d3928;
+}
+
 .instr-bots { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
 .instr-bot {
   display: flex; align-items: center; gap: 12px;
@@ -468,8 +480,7 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .instr-bot-go { color: var(--muted); font-size: 15px; }
 .instr-bot:active { transform: scale(.98); }
 
-.instr-mention { color: var(--accent); text-decoration: none; border-bottom: 1px solid #c8ff3155; }
-:root[data-theme="light"] .instr-mention { color: #486500; }
+.instr-mention { color: var(--slide-green); text-decoration: none; border-bottom: 1px solid #c6ff5555; }
 
 .instr-swipe {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -492,7 +503,7 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .instr-arrow:hover { border-color: #c8ff3166; color: var(--accent); }
 .instr-arrow:active { transform: scale(.92); }
 
-/* Лента шагов: листается пальцем, колесом мыши и перетаскиванием. */
+/* Лента шагов: листается пальцем, перетаскиванием и стрелками. */
 .instr-steps {
   list-style: none;
   margin: 0 calc(-1 * var(--pad));
@@ -505,107 +516,86 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 }
 .instr-steps::-webkit-scrollbar { display: none; }
 
+/* Карточка повторяет слайд: те же блоки, порядок и цвета. */
 .instr-card {
-  flex: 0 0 min(300px, 84%);
+  flex: 0 0 min(300px, 86%);
   scroll-snap-align: center;
   display: flex; flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-l);
-  padding: 16px;
+  padding: 16px 16px 14px;
+  border-radius: 20px;
+  background:
+    radial-gradient(120% 60% at 50% 100%, #c6ff5514, transparent 70%),
+    var(--slide-bg);
+  border: 1px solid #1c2619;
+  color: var(--slide-text);
 }
 
 .instr-card-top {
-  display: flex; align-items: center; justify-content: space-between;
-  padding-bottom: 10px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--slide-line);
 }
-.instr-brand { font-weight: 800; letter-spacing: -0.5px; }
-.instr-count { color: var(--accent); font-size: 12px; font-weight: 700; }
-:root[data-theme="light"] .instr-count { color: #486500; }
+.instr-logo { position: relative; font-size: 17px; font-weight: 800; letter-spacing: -0.6px; }
+/* Салатовая точка над «i» — как в логотипе на слайде. */
+.instr-logo::before {
+  content: "";
+  position: absolute; left: 1px; top: -1px;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--slide-green);
+}
+.instr-count { font-size: 12px; font-weight: 800; color: var(--slide-green); letter-spacing: .4px; }
 
-.instr-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+.instr-head { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; }
 .instr-num {
-  flex: 0 0 28px;
-  width: 28px; height: 28px;
+  flex: 0 0 30px;
+  width: 30px; height: 30px;
   border-radius: 9px;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--slide-green);
+  color: #0a0f08;
   display: grid; place-items: center;
   font-weight: 800; font-size: 13px;
 }
-.instr-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.instr-title { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
-.instr-sub { color: var(--muted); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
-
-/* Макет переписки: не скриншот, а те же сообщения версткой. */
-.mock {
-  flex: 1;
-  display: flex; flex-direction: column;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-.mock-top {
-  padding: 8px 12px;
-  font-size: 12px; font-weight: 700;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-}
-.mock-bot { color: var(--muted); font-weight: 500; }
-/* Сообщения прижаты к низу — так же, как в настоящей переписке. */
-.mock-body { display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; padding: 12px; height: 100%; }
-
-.mock-msg {
-  align-self: flex-start;
-  max-width: 88%;
-  padding: 8px 11px;
-  border-radius: 13px 13px 13px 4px;
-  background: var(--surface-3);
-  font-size: 12px; line-height: 1.45;
-  white-space: pre-wrap;
+.instr-title { font-size: 18px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.15; }
+.instr-sub {
+  color: var(--slide-muted);
+  font-size: 13px; line-height: 1.35;
+  margin-bottom: 14px;
   overflow-wrap: anywhere;
 }
-.mock-msg.mine {
-  align-self: flex-end;
-  border-radius: 13px 13px 4px 13px;
-  background: linear-gradient(135deg, #c8ff3133, #c8ff3114);
-  border: 1px solid #c8ff3140;
-}
 
-.mock-btn {
-  align-self: stretch;
-  text-align: center;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--surface-3);
-  border: 1px solid var(--line);
-  font-size: 12px; font-weight: 600;
-  color: var(--text);
+/* Кадр переписки — вырезка из слайда в салатовой рамке со свечением. */
+.instr-shot {
+  /* Пропорция кадра задана явно: в колонке карточки высота от flex
+     получалась непредсказуемой, и на широком экране кадр сплющивался. */
+  flex: 0 0 auto;
+  aspect-ratio: 560 / 1106;
+  max-height: 46vh;
+  display: flex;
+  border-radius: 16px;
+  border: 1px solid var(--slide-frame);
+  box-shadow: 0 0 22px #c6ff5522;
+  overflow: hidden;
+  background: #000;
 }
-
-.mock-file {
-  align-self: flex-start;
-  display: flex; align-items: center; gap: 9px;
-  max-width: 92%;
-  padding: 8px 11px;
-  border-radius: 13px;
-  background: var(--surface-3);
-}
-.mock-file.mine { align-self: flex-end; background: #c8ff3126; border: 1px solid #c8ff3140; }
-.mock-file-icon { font-size: 16px; }
-.mock-file-text { display: flex; flex-direction: column; min-width: 0; }
-.mock-file-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-.mock-file-meta { font-size: 11px; color: var(--muted); }
+/* Кадр высокий: показываем его верх — там сама переписка, внизу клавиатура. */
+.instr-shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
 
 .instr-hint {
   margin-top: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  color: var(--slide-muted);
+  font-size: 12px; line-height: 1.35;
+  text-align: center;
 }
+.instr-sign {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px; font-weight: 800;
+  color: var(--slide-green);
+}
+
+.instr-ticks { display: flex; gap: 4px; margin-top: 12px; }
+.instr-tick { flex: 1; height: 3px; border-radius: 2px; background: var(--slide-off); }
+.instr-tick.on { background: var(--slide-green); }
 
 .instr-note {
   margin-top: 20px;
