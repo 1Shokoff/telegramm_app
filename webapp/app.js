@@ -635,17 +635,6 @@ function instructionStep(step, total) {
   );
 }
 
-/* Стрелки для мыши: пальцем и перетаскиванием лента листается сама,
-   но обычным колесом карточку не сменить. */
-function scrollSteps(direction) {
-  const list = document.querySelector('.instr-steps');
-  if (!list) return;
-  const card = list.querySelector('.instr-card');
-  const gap = 12;
-  const step = card ? card.offsetWidth + gap : list.clientWidth;
-  list.scrollBy({ left: direction * step, behavior: 'smooth' });
-}
-
 function instructionBlock(order) {
   const data = (state.boot && state.boot.instruction) || { steps: [], bots: [] };
   if (!data.steps.length) return '';
@@ -671,16 +660,8 @@ function instructionBlock(order) {
             '<span class="req-value mono">' + esc(order.udidMasked) + '</span>' +
           '</span></div>'
         : '') +
-      '<div class="instr-swipe">' +
-        '<span>Листайте шаги вбок</span>' +
-        '<span class="instr-arrows">' +
-          '<button type="button" class="instr-arrow" data-action="instr-prev" ' +
-            'aria-label="Предыдущий шаг">‹</button>' +
-          '<button type="button" class="instr-arrow" data-action="instr-next" ' +
-            'aria-label="Следующий шаг">›</button>' +
-        '</span>' +
-      '</div>' +
-      '<ol class="instr-steps">' +
+      '<div class="instr-swipe">Листайте шаги вбок: свайпом или мышью</div>' +
+      '<ol class="instr-steps" tabindex="0" aria-label="Шаги инструкции">' +
         data.steps.map((step) => instructionStep(step, data.steps.length)).join('') +
       '</ol>' +
       (order.instruction
@@ -1131,14 +1112,11 @@ function updateBackButton() {
 /* Ряды фильтров прокручиваются вбок. На телефоне это делает палец,
    а на компьютере колесо мыши крутит страницу, и часть ряда недостижима —
    поэтому колесо над рядом двигаем его сами, плюс даём тащить мышью. */
-function bindScrollX(el, wheelVertical) {
+function bindScrollX(el) {
   el.addEventListener('wheel', (event) => {
     const max = el.scrollWidth - el.clientWidth;
     if (max <= 1) return;
     const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY);
-    // Высокая лента (карточки инструкции) не должна перехватывать обычную
-    // прокрутку страницы — только боковую, с трекпада.
-    if (!sideways && wheelVertical === false) return;
     const delta = sideways ? event.deltaX : event.deltaY;
     if (!delta) return;
     // На краю ряда колесо возвращается странице — иначе прокрутка упирается.
@@ -1188,9 +1166,89 @@ function bindScrollX(el, wheelVertical) {
   }, true);
 }
 
+/* Лента шагов инструкции — это страницы, а не ряд чипов: на экране один
+   шаг, и короткого движения достаточно, чтобы пришёл следующий. Пальцем
+   это делает сам браузер, мыши и клавиатуре помогаем здесь. */
+function bindPager(el) {
+  // Шаг ленты берём из разметки, чтобы не повторять зазор из стилей.
+  const pageWidth = () => (
+    el.children.length > 1
+      ? el.children[1].offsetLeft - el.children[0].offsetLeft
+      : el.clientWidth
+  );
+  const current = () => Math.round(el.scrollLeft / Math.max(1, pageWidth()));
+
+  let dragging = false;
+  let moved = false;
+  let startX = 0;
+  let startLeft = 0;
+
+  const go = (index) => {
+    const last = el.children.length - 1;
+    const target = Math.max(0, Math.min(last, index));
+    el.scrollTo({ left: target * pageWidth(), behavior: 'smooth' });
+  };
+
+  // Боковое колесо и трекпад листают ленту, вертикальное остаётся странице.
+  el.addEventListener('wheel', (event) => {
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) return;
+    if ((event.deltaX < 0 && el.scrollLeft <= 0) || (event.deltaX > 0 && el.scrollLeft >= max - 1)) return;
+    event.preventDefault();
+    el.scrollBy({ left: event.deltaX, behavior: 'auto' });
+  }, { passive: false });
+
+  el.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'touch' || event.button !== 0) return;
+    dragging = true;
+    moved = false;
+    startX = event.clientX;
+    startLeft = el.scrollLeft;
+    el.classList.add('dragging');
+  });
+
+  el.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - startX;
+    if (!moved && Math.abs(dx) > 4) moved = true;
+    if (moved) el.scrollLeft = startLeft - dx;
+  });
+
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    const dx = event && typeof event.clientX === 'number' ? event.clientX - startX : 0;
+    const from = Math.round(startLeft / Math.max(1, pageWidth()));
+    if (moved) go(dx <= -40 ? from + 1 : (dx >= 40 ? from - 1 : from));
+    // Снап возвращаем, когда лента доехала: включённый посреди движения,
+    // он утащил бы карточку к ближайшему краю.
+    window.setTimeout(() => { if (!dragging) el.classList.remove('dragging'); }, 420);
+  };
+  el.addEventListener('pointerup', stop);
+  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerleave', stop);
+
+  // Стрелок у ленты нет, поэтому клавиатуре даём листать напрямую.
+  el.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    go(current() + (event.key === 'ArrowRight' ? 1 : -1));
+  });
+
+  // После перетаскивания курсор стоит на ссылке внутри карточки — но это
+  // была прокрутка, а не нажатие.
+  el.addEventListener('click', (event) => {
+    if (!moved) return;
+    moved = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+}
+
 function bindInputs() {
   document.querySelectorAll('.filters, .stepper').forEach((el) => bindScrollX(el));
-  document.querySelectorAll('.instr-steps').forEach((el) => bindScrollX(el, false));
+  document.querySelectorAll('.instr-steps').forEach((el) => bindPager(el));
 
   const udid = document.getElementById('udidInput');
   if (udid) {
@@ -1411,9 +1469,6 @@ const actions = {
     toast('Заказ ' + data.order.code + ' создан');
     render();
   }),
-
-  'instr-prev': () => scrollSteps(-1),
-  'instr-next': () => scrollSteps(1),
 
   'receipt-pick': () => {
     const input = document.getElementById('receiptFile');

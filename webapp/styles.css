@@ -483,45 +483,40 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .instr-mention { color: var(--slide-green); text-decoration: none; border-bottom: 1px solid #c6ff5555; }
 
 .instr-swipe {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
   color: var(--muted); font-size: 12px;
-  margin: 16px 0 8px;
+  margin: 16px 0 10px;
 }
-/* Стрелки нужны только мыши: пальцем лента листается сама. */
-.instr-arrows { display: none; gap: 8px; }
-@media (hover: hover) and (pointer: fine) { .instr-arrows { display: flex; } }
-.instr-arrow {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 17px; line-height: 1;
-  display: grid; place-items: center;
-  cursor: pointer;
-}
-.instr-arrow:hover { border-color: #c8ff3166; color: var(--accent); }
-.instr-arrow:active { transform: scale(.92); }
 
-/* Лента шагов: листается пальцем, перетаскиванием и стрелками. */
+/* Лента шагов ведёт себя как страницы в мобильном приложении: на экране
+   ровно один шаг, соседний приходит свайпом или перетаскиванием мышью.
+   На ПК лента держит ширину телефона — карточка повторяет слайд, и
+   растягивать её через весь экран незачем. */
 .instr-steps {
   list-style: none;
-  margin: 0 calc(-1 * var(--pad));
-  padding: 4px var(--pad) 14px;
+  margin: 0 auto;
+  padding: 0 0 8px;
+  max-width: 420px;
   display: flex;
   gap: 12px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
 }
 .instr-steps::-webkit-scrollbar { display: none; }
+@media (hover: hover) and (pointer: fine) { .instr-steps { cursor: grab; } }
+/* Пока тащим мышью, снап выключен: иначе браузер прыгает к ближайшему
+   шагу прямо посреди движения. */
+.instr-steps.dragging { scroll-snap-type: none; cursor: grabbing; user-select: none; }
+.instr-steps.dragging .instr-card { pointer-events: none; }
 
 /* Карточка повторяет слайд: те же блоки, порядок и цвета. */
 .instr-card {
-  flex: 0 0 min(300px, 86%);
+  flex: 0 0 100%;
+  max-width: 100%;
   scroll-snap-align: center;
   display: flex; flex-direction: column;
-  padding: 16px 16px 14px;
+  padding: 16px 16px 12px;
   border-radius: 20px;
   background:
     radial-gradient(120% 60% at 50% 100%, #c6ff5514, transparent 70%),
@@ -565,11 +560,17 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 /* Кадр переписки — вырезка из слайда в салатовой рамке со свечением. */
 .instr-shot {
-  /* Пропорция кадра задана явно: в колонке карточки высота от flex
-     получалась непредсказуемой, и на широком экране кадр сплющивался. */
+  /* Размер ведём от высоты: ширина считается из пропорции кадра, поэтому
+     переписка видна целиком, без обрезки, и кадр стоит по центру карточки.
+     В колонке карточки высота от flex получалась непредсказуемой. */
   flex: 0 0 auto;
+  align-self: center;
+  /* Карточки в ленте одной высоты — по самой длинной подписи. Свободное
+     место забирает кадр, иначе оно копилось бы пустотой под полосой шагов. */
+  margin-block: auto;
+  height: min(62vh, 560px);
   aspect-ratio: 560 / 1106;
-  max-height: 46vh;
+  max-width: 100%;
   display: flex;
   border-radius: 16px;
   border: 1px solid var(--slide-frame);
@@ -581,19 +582,19 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .instr-shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
 
 .instr-hint {
-  margin-top: 12px;
+  margin-top: 10px;
   color: var(--slide-muted);
   font-size: 12px; line-height: 1.35;
   text-align: center;
 }
 .instr-sign {
-  margin-top: 8px;
+  margin-top: 6px;
   text-align: center;
   font-size: 13px; font-weight: 800;
   color: var(--slide-green);
 }
 
-.instr-ticks { display: flex; gap: 4px; margin-top: 12px; }
+.instr-ticks { display: flex; gap: 4px; margin-top: 8px; }
 .instr-tick { flex: 1; height: 3px; border-radius: 2px; background: var(--slide-off); }
 .instr-tick.on { background: var(--slide-green); }
 
