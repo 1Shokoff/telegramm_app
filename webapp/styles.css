@@ -331,6 +331,27 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 }
 .app-card .price { font-size: 12px; font-weight: 700; margin-top: 8px; }
 .app-card .arrow { position: absolute; top: 12px; right: 12px; color: var(--muted); font-size: 13px; }
+/* Версия и минимальная iOS — из сборки, которая лежит на сервере. */
+.app-card .app-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+/* Оформление заказа — весь верх карточки, скачивание — отдельной кнопкой:
+   вложить ссылку в кнопку нельзя, поэтому карточка стала обычным блоком. */
+.app-open {
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 2px;
+}
+.app-get {
+  display: block;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px; font-weight: 600; text-align: center;
+  text-decoration: none;
+}
+.app-get:active { transform: scale(.97); border-color: var(--accent); }
 
 .app-icon {
   width: 42px; height: 42px;
@@ -1091,13 +1112,14 @@ a.brand { text-decoration: none; color: inherit; }
 .btn + .btn { margin-top: 10px; }
 .btn-row > .btn + .btn { margin-top: 0; }
 
-/* Карточка приложения — кнопка: сбрасываем системный вид. */
-button.app-card {
+/* Верх карточки — кнопка «оформить»: сбрасываем системный вид. */
+.app-open {
   font: inherit; color: inherit; text-align: left; width: 100%;
+  background: none; border: 0; padding: 0;
   cursor: pointer; -webkit-appearance: none; appearance: none;
-  transition: transform .15s ease, border-color .15s ease;
 }
-button.app-card:active { transform: scale(.97); border-color: var(--accent); }
+/* Нажатие отыгрывает сама карточка (.app-card:active), иначе масштаб
+   наложился бы дважды. */
 .app-card .name, .app-card .cat { display: block; }
 
 /* Логотип в шапке — кнопка «на главную». */

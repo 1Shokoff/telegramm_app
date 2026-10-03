@@ -14,63 +14,49 @@ ICON_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 # В webapp/icons/ лежат оригинальные иконки и фирменные значки.
 # Источники сохранены в webapp/icons/sources.json. PNG имеет приоритет.
 
-CATEGORIES = ("Банки", "Общение", "Нейросети", "Покупки", "Сервисы", "Медиа")
+CATEGORIES = ("Банки", "Общение", "Медиа", "Нейросети", "Сервисы")
 
 #   desc  — описание услуги по этому приложению: его видит покупатель
 #           в витрине и проверяет модерация платёжной системы
+#
+# Версия, размер и минимальная iOS здесь не хранятся: их читает app/ipa.py
+# прямо из файла сборки, иначе они разъехались бы с тем, что лежит на сервере.
 APPS = [
     {"slug": "sber", "name": "СберБанк", "category": "Банки", "color": "#21A038",
      "desc": "Счета и карты, переводы по номеру телефона, оплата услуг и QR-кодов."},
-    {"slug": "alfa", "name": "Альфа-Банк", "category": "Банки", "color": "#EF3124",
-     "desc": "Карты и счета, переводы, платежи и кэшбэк."},
-    {"slug": "vk", "name": "ВКонтакте", "category": "Общение", "color": "#0077FF",
-     "desc": "Лента, сообщения, сообщества, музыка и клипы."},
-    {"slug": "chatgpt", "name": "ChatGPT", "category": "Нейросети", "color": "#10A37F",
-     "desc": "Ответы на вопросы, тексты, перевод и разбор фотографий."},
-    {"slug": "claude", "name": "Claude", "category": "Нейросети", "color": "#D97757",
-     "desc": "Помощник для длинных текстов, документов и кода."},
-    {"slug": "avito", "name": "Авито", "category": "Покупки", "color": "#00AAFF",
-     "desc": "Объявления рядом с вами, переписка с продавцами и доставка."},
     {"slug": "tbank", "name": "Т-Банк", "category": "Банки", "color": "#FFDD2D", "dark": True,
-     "desc": "Карты и счета, переводы, инвестиции и платежи."},
-    {"slug": "vtb", "name": "ВТБ", "category": "Банки", "color": "#0A2896",
-     "desc": "Карты, вклады, переводы и оплата услуг."},
-    {"slug": "gazprombank", "name": "Газпромбанк", "category": "Банки", "color": "#0079C8",
-     "desc": "Счета и карты, переводы и платежи."},
-    {"slug": "psb", "name": "ПСБ", "category": "Банки", "color": "#EE7203",
-     "desc": "Карты и счета, переводы, платежи и вклады."},
-    {"slug": "sovcombank", "name": "Совкомбанк", "category": "Банки", "color": "#E3001B",
-     "desc": "Карты рассрочки, переводы и оплата услуг."},
-    {"slug": "raiffeisen", "name": "Райффайзен", "category": "Банки", "color": "#FEE600", "dark": True,
-     "desc": "Счета и карты, переводы и платежи."},
-    {"slug": "telegram", "name": "Telegram", "category": "Общение", "color": "#2AABEE",
-     "desc": "Мессенджер: чаты, каналы, звонки и файлы."},
-    {"slug": "deepseek", "name": "DeepSeek", "category": "Нейросети", "color": "#4D6BFE",
-     "desc": "Нейросеть для вопросов, текстов и кода."},
-    {"slug": "perplexity", "name": "Perplexity", "category": "Нейросети", "color": "#20808D",
-     "desc": "Поиск с ответами нейросети и ссылками на источники."},
-    {"slug": "ozon", "name": "Ozon", "category": "Покупки", "color": "#005BFF",
-     "desc": "Заказы, отслеживание доставки и пункты выдачи."},
-    {"slug": "wildberries", "name": "Wildberries", "category": "Покупки", "color": "#CB11AB",
-     "desc": "Покупки, примерка, возвраты и пункты выдачи."},
-    {"slug": "yandex-market", "name": "Яндекс Маркет", "category": "Покупки", "color": "#FC3F1D",
-     "desc": "Заказы и доставка, сравнение цен и отзывы."},
-    {"slug": "gosuslugi", "name": "Госуслуги", "category": "Сервисы", "color": "#0D4CD3",
-     "desc": "Документы, выплаты, штрафы и запись в ведомства."},
-    {"slug": "rzd", "name": "РЖД Пассажирам", "category": "Сервисы", "color": "#E21A1A",
-     "desc": "Билеты на поезда, расписание и электронная регистрация."},
-    {"slug": "2gis", "name": "2ГИС", "category": "Сервисы", "color": "#19AA1E",
-     "desc": "Карты и справочник организаций, работают без интернета."},
-    {"slug": "yandex-go", "name": "Яндекс Go", "category": "Сервисы", "color": "#FFCC00", "dark": True,
-     "desc": "Такси, доставка и каршеринг в одном приложении."},
-    {"slug": "yandex-music", "name": "Яндекс Музыка", "category": "Медиа", "color": "#FFCC00", "dark": True,
+     "desc": "Карты и счета, переводы, инвестиции и оплата услуг."},
+    {"slug": "ozon-bank", "name": "Ozon Банк", "category": "Банки", "color": "#0055FF",
+     "desc": "Карта и счёт Ozon, переводы, оплата покупок и кэшбэк."},
+    {"slug": "mts-money", "name": "МТС Деньги", "category": "Банки", "color": "#7B61FF",
+     "desc": "Карты и счета МТС, переводы и платежи. "
+             "На экране телефона приложение называется «Пять монет»."},
+    {"slug": "max", "name": "MAX", "category": "Общение", "color": "#7A5CFF",
+     "desc": "Мессенджер MAX: переписка, звонки, каналы и чат-боты."},
+    {"slug": "vk-messenger", "name": "VK Мессенджер", "category": "Общение", "color": "#0077FF",
+     "desc": "Переписка и звонки ВКонтакте — без ленты и новостей."},
+    {"slug": "vk-video", "name": "VK Видео", "category": "Медиа", "color": "#FF2244",
+     "desc": "Ролики, трансляции и подписки ВКонтакте."},
+    {"slug": "yandex-music", "name": "Яндекс Музыка", "category": "Медиа", "color": "#111111",
      "desc": "Музыка и подкасты, в том числе без интернета."},
-    {"slug": "kinopoisk", "name": "Кинопоиск", "category": "Медиа", "color": "#FF5500",
-     "desc": "Фильмы и сериалы, подборки, оценки и расписание кино."},
+    {"slug": "spotify", "name": "Spotify", "category": "Медиа", "color": "#1DB954",
+     "desc": "Музыка и подкасты, плейлисты и офлайн-режим."},
+    {"slug": "aldente", "name": "Al dente", "category": "Нейросети", "color": "#121212",
+     "desc": "Чат с нейросетью: ответы на вопросы, тексты и перевод. Сторонняя сборка."},
+    {"slug": "yandex", "name": "Яндекс", "category": "Сервисы", "color": "#FF3311",
+     "desc": "Поиск, Алиса, погода и новости в одном приложении."},
+    {"slug": "yandex-go", "name": "Яндекс Go", "category": "Сервисы", "color": "#FFEE00", "dark": True,
+     "desc": "Такси, доставка и каршеринг в одном приложении."},
+    {"slug": "cloud-mail", "name": "Облако Mail.ru", "category": "Сервисы", "color": "#0077FF",
+     "desc": "Хранилище для фото и документов с автозагрузкой с телефона."},
+    {"slug": "yota", "name": "Yota", "category": "Сервисы", "color": "#2BB2E5",
+     "desc": "Личный кабинет Yota: баланс, тариф и управление номером."},
+    {"slug": "v2guard", "name": "V2Guard", "category": "Сервисы", "color": "#0B0B0B",
+     "desc": "Клиент V2Ray: подключение к своему серверу по своим настройкам."},
 ]
 
 # Плитки в шапке витрины.
-FEATURED = ("sber", "alfa", "vk", "chatgpt", "claude", "avito")
+FEATURED = ("sber", "tbank", "max", "yandex", "spotify", "vk-video")
 
 
 def _letter(name: str) -> str:
@@ -80,7 +66,9 @@ def _letter(name: str) -> str:
 CATALOG_NAME = "Весь каталог"
 
 
-# Как покупатели называют банки в реквизитах — приводим к слагам каталога.
+# Как покупатели называют банки в реквизитах — приводим к имени иконки.
+# Значки банков лежат в webapp/icons/ независимо от каталога: получать
+# перевод можно на банк, приложения которого мы не продаём.
 BANK_ALIASES = {
     "тинькофф": "tbank",
     "тинькоф": "tbank",
@@ -90,6 +78,8 @@ BANK_ALIASES = {
     "промсвязьбанк": "psb",
     "газпром": "gazprombank",
     "совком": "sovcombank",
+    "озон": "ozon-bank",
+    "мтс": "mts-money",
 }
 
 
@@ -129,18 +119,27 @@ def product_name(slug: str | None) -> str:
     return app["name"] if app else CATALOG_NAME
 
 
+def icon_file(slug: str) -> str:
+    """Имя файла картинки для слага — любого, не только из каталога.
+
+    Значки банков нужны странице оплаты даже тогда, когда приложений
+    этого банка в каталоге нет.
+    """
+    if not slug or not ICONS_DIR.is_dir():
+        return ""
+    for ext in ICON_EXTENSIONS:
+        if (ICONS_DIR / (slug + ext)).is_file():
+            return slug + ext
+    return ""
+
+
 def icon_files() -> dict[str, str]:
-    """Какая картинка лежит для каждого слага. Файл можно добавить на лету."""
+    """Какая картинка лежит для каждого приложения каталога."""
     found: dict[str, str] = {}
-    if not ICONS_DIR.is_dir():
-        return found
-    names = {p.name for p in ICONS_DIR.iterdir() if p.is_file()}
     for app in APPS:
-        for ext in ICON_EXTENSIONS:
-            candidate = app["slug"] + ext
-            if candidate in names:
-                found[app["slug"]] = candidate
-                break
+        name = icon_file(app["slug"])
+        if name:
+            found[app["slug"]] = name
     return found
 
 
@@ -162,11 +161,20 @@ def public_catalog(default_price: int) -> list[dict]:
     ]
 
 
-def as_text() -> str:
-    """Каталог для чата бота — сгруппирован по категориям."""
+def as_text(links: dict[str, str] | None = None) -> str:
+    """Каталог для чата бота — по категориям.
+
+    links: слаг → адрес сборки. Для таких приложений название становится
+    ссылкой на скачивание, остальные идут обычным текстом.
+    """
+    links = links or {}
     lines: list[str] = []
     for cat in CATEGORIES:
-        names = [a["name"] for a in APPS if a["category"] == cat]
+        names = [
+            '<a href="%s">%s</a>' % (links[a["slug"]], a["name"])
+            if a["slug"] in links else a["name"]
+            for a in APPS if a["category"] == cat
+        ]
         if names:
             lines.append(f"<b>{cat}</b>\n" + " · ".join(names))
     return "\n\n".join(lines)

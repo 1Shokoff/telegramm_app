@@ -12,6 +12,7 @@ from . import (
     const,
     db,
     instruction as instruction_mod,
+    ipa as ipa_mod,
     legal,
     pages,
     texts,
@@ -45,16 +46,28 @@ PHOTO_TYPES = ("image/jpeg", "image/png", "image/webp", "image/heic", "image/hei
 RECEIPT_TYPES = PHOTO_TYPES + ("application/pdf",)
 
 
+def catalog_public(cfg: Config) -> list[dict]:
+    """Каталог для витрины: к приложению добавляем цену и сборку, если она есть."""
+    builds = ipa_mod.entries(cfg.ipa_dir)
+    items = []
+    for item in catalog.public_catalog(cfg.price_rub):
+        row = dict(item, priceText=texts.money(item["price"]))
+        build = builds.get(item["slug"])
+        if build:
+            row["build"] = ipa_mod.public(build)
+        items.append(row)
+    return items
+
+
 def requisites_public(cfg: Config) -> list[dict]:
     """Реквизиты для витрины: к строкам добавляем адрес иконки."""
-    icons = catalog.icon_files()
     rows = []
     for row in cfg.requisites:
         icon = row["icon"]
         if icon == "sbp":
             url = "/static/brand/sbp.svg"
-        elif icon and icon in icons:
-            url = "/static/icons/" + icons[icon]
+        elif catalog.icon_file(icon):
+            url = "/static/icons/" + catalog.icon_file(icon)
         else:
             url = ""
         rows.append(dict(row, iconUrl=url))
@@ -232,10 +245,7 @@ async def bootstrap(request: web.Request) -> web.Response:
                 # Пусто — витрина покажет цену заказа.
                 "amount": cfg.pay_amount,
             },
-            "catalog": [
-                dict(item, priceText=texts.money(item["price"]))
-                for item in catalog.public_catalog(cfg.price_rub)
-            ],
+            "catalog": catalog_public(cfg),
             "categories": list(catalog.CATEGORIES),
             "featured": list(catalog.FEATURED),
             "steps": list(const.STEP_NAMES),
@@ -285,10 +295,7 @@ async def public_bootstrap(request: web.Request) -> web.Response:
                 "mode": cfg.payment_mode, "details": "",
                 "stars": cfg.price_stars, "requisites": [],
             },
-            "catalog": [
-                dict(item, priceText=texts.money(item["price"]))
-                for item in catalog.public_catalog(cfg.price_rub)
-            ],
+            "catalog": catalog_public(cfg),
             "categories": list(catalog.CATEGORIES),
             "featured": list(catalog.FEATURED),
             "steps": list(const.STEP_NAMES),
@@ -626,6 +633,29 @@ async def index(request: web.Request) -> web.Response:
         text=html.replace("__V__", asset_version()),
         content_type="text/html",
         headers={"Cache-Control": "no-cache"},
+    )
+
+
+@routes.get("/ipa/{slug}")
+async def download_ipa(request: web.Request) -> web.StreamResponse:
+    """Сборка приложения файлом. Ссылка открытая — её дают и в канале.
+
+    Слаг сверяется с каталогом, поэтому произвольный путь сюда не подставить.
+    """
+    cfg = cfg_of(request)
+    entry = ipa_mod.find(cfg.ipa_dir, request.match_info["slug"])
+    if not entry:
+        raise web.HTTPNotFound(text="Сборка не найдена")
+
+    log.info("скачивание %s (%s)", entry["file"], ipa_mod.size_text(entry["size"]))
+    return web.FileResponse(
+        entry["path"],
+        headers={
+            # Тип архива, чтобы браузер не пытался показать файл сам.
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": 'attachment; filename="%s"' % ipa_mod.download_name(entry),
+            "Cache-Control": "public, max-age=3600",
+        },
     )
 
 

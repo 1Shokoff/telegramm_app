@@ -10,9 +10,13 @@ import hashlib
 import hmac
 import json
 import os
+import pathlib
+import plistlib
 import sys
 import tempfile
 import time
+import zipfile
+from dataclasses import replace
 from urllib.parse import urlencode
 
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
@@ -46,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, const, db, udid as udid_mod  # noqa: E402
+from app import auth, catalog, const, db, ipa as ipa_mod, udid as udid_mod  # noqa: E402
 from app.api import build_app  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, ServiceError  # noqa: E402
@@ -317,28 +321,27 @@ async def test_close_and_reorder(cfg, bot: FakeBot, svc: OrderService) -> None:
 
 async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nЗаказ конкретного приложения")
-    from app import catalog
 
     bot.sent.clear()
-    order, created = await svc.get_or_create_order(BUYER, "chatgpt")
-    check("заказ на приложение создан", created and order["app_slug"] == "chatgpt")
+    order, created = await svc.get_or_create_order(BUYER, "spotify")
+    check("заказ на приложение создан", created and order["app_slug"] == "spotify")
     check("без своей цены — общая", order["price_rub"] == cfg.price_rub)
-    check("продавец видит товар", any("Товар: ChatGPT" in t for t in bot.to(SELLER)))
+    check("продавец видит товар", any("Товар: Spotify" in t for t in bot.to(SELLER)))
 
-    same, created2 = await svc.get_or_create_order(BUYER, "claude")
+    same, created2 = await svc.get_or_create_order(BUYER, "max")
     check("неоплаченный заказ перенастроен на другое приложение",
-          not created2 and same["id"] == order["id"] and same["app_slug"] == "claude")
+          not created2 and same["id"] == order["id"] and same["app_slug"] == "max")
 
     whole, _ = await svc.get_or_create_order(BUYER, None)
     check("можно вернуться ко всему каталогу", whole["app_slug"] is None)
 
-    vk = catalog.get_app("vk")
-    vk["price"] = 990
+    sber = catalog.get_app("sber")
+    sber["price"] = 990
     try:
-        priced, _ = await svc.get_or_create_order(BUYER, "vk")
+        priced, _ = await svc.get_or_create_order(BUYER, "sber")
         check("своя цена приложения применяется", priced["price_rub"] == 990)
     finally:
-        vk.pop("price", None)
+        sber.pop("price", None)
 
     try:
         await svc.get_or_create_order(BUYER, "нет-такого")
@@ -347,9 +350,9 @@ async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("неизвестное приложение отклонено", True)
 
     await svc.claim_payment(order["id"], BUYER)
-    kept, _ = await svc.get_or_create_order(BUYER, "ozon")
+    kept, _ = await svc.get_or_create_order(BUYER, "yota")
     check("заказ с заявленной оплатой не перенастраивается",
-          kept["app_slug"] == "vk" and kept["status"] == const.PAYMENT_CHECK)
+          kept["app_slug"] == "sber" and kept["status"] == const.PAYMENT_CHECK)
 
     await svc.cancel(order["id"], "test", by_seller=True)
 
@@ -369,7 +372,7 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
 
         res = await client.get("/api/bootstrap", headers=buyer_headers)
         data = await res.json()
-        check("bootstrap отдаёт каталог", len(data["catalog"]) == 24)
+        check("bootstrap отдаёт каталог", len(data["catalog"]) == 15, str(len(data["catalog"])))
         check("цена в витрине", data["product"]["priceText"].startswith("3"))
         check("покупатель не продавец", data["user"]["isSeller"] is False)
 
@@ -548,10 +551,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("у приложений в витрине есть цена",
               all(a["price"] and a["priceText"] for a in items))
 
-        res = await client.post("/api/order/create", headers=buyer_headers, json={"app": "chatgpt"})
+        res = await client.post("/api/order/create", headers=buyer_headers, json={"app": "spotify"})
         created = (await res.json())["order"]
         check("заказ приложения через API",
-              created["app"] == "chatgpt" and created["productName"] == "ChatGPT")
+              created["app"] == "spotify" and created["productName"] == "Spotify")
         await client.post("/api/order/cancel", headers=buyer_headers, json={"orderId": created["id"]})
 
         res = await client.post("/api/order/create", headers=buyer_headers, json={"app": "нет"})
@@ -575,7 +578,8 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         res = await client.get("/api/public")
         public = await res.json()
         check("витрина открывается без подписи", res.status == 200 and public["public"] is True)
-        check("в публичной витрине есть каталог", len(public["catalog"]) == 24)
+        check("в публичной витрине есть каталог", len(public["catalog"]) == 15,
+              str(len(public["catalog"])))
         check("у всех приложений есть описание",
               all(a["desc"] for a in public["catalog"]))
         check("в публичной витрине есть реквизиты",
@@ -601,6 +605,72 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("список документов открывается", res.status == 200)
     finally:
         await client.close()
+
+
+def make_ipa(path, min_os: str = "16.0") -> None:
+    """Сборка-пустышка: внутри только Info.plist, как в настоящей."""
+    info = plistlib.dumps({
+        "CFBundleIdentifier": "ru.test.app",
+        "CFBundleShortVersionString": "1.0.0",
+        "MinimumOSVersion": min_os,
+    })
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("Payload/Test.app/Info.plist", info)
+        zf.writestr("Payload/Test.app/Test", b"x" * 2048)
+
+
+async def test_ipa(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nСборки .ipa")
+    folder = pathlib.Path(tempfile.mkdtemp())
+    make_ipa(folder / "sber-17.6.1.ipa")
+    make_ipa(folder / "unknown-1.0.ipa")
+    (folder / "readme.txt").write_text("не сборка", encoding="utf-8")
+
+    found = ipa_mod.entries(folder)
+    check("сборка нашлась по слагу каталога", list(found) == ["sber"], str(list(found)))
+    check("версия берётся из имени файла", found["sber"]["version"] == "17.6.1")
+    check("минимальная iOS читается из сборки", found["sber"]["minOs"] == "16.0")
+    check("размер человеку", ipa_mod.size_text(262_400_000) == "250,2 МБ",
+          ipa_mod.size_text(262_400_000))
+    check("имя файла для браузера", ipa_mod.download_name(found["sber"]) == "sber-17.6.1.ipa")
+
+    slug, version = ipa_mod._slug_and_version("ozon-bank-19.27.0")
+    check("слаг с дефисом разобран", (slug, version) == ("ozon-bank", "19.27.0"))
+    slug, version = ipa_mod._slug_and_version("sber")
+    check("файл без версии", (slug, version) == ("sber", ""))
+
+    with_files = replace(cfg, ipa_dir=folder)
+    app = build_app(with_files, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        res = await client.get("/api/public")
+        data = await res.json()
+        sber = next(a for a in data["catalog"] if a["slug"] == "sber")
+        other = next(a for a in data["catalog"] if a["slug"] == "spotify")
+        check("витрина знает про сборку", sber["build"]["version"] == "17.6.1")
+        check("у приложения без файла сборки нет", "build" not in other)
+
+        res = await client.get("/ipa/sber")
+        body = await res.read()
+        check("файл отдаётся", res.status == 200 and len(body) > 2000, str(res.status))
+        check("браузер сохранит файл",
+              res.headers["Content-Disposition"] == 'attachment; filename="sber-17.6.1.ipa"',
+              res.headers.get("Content-Disposition", ""))
+        check("тип — архив", res.headers["Content-Type"] == "application/octet-stream")
+
+        res = await client.get("/ipa/spotify")
+        check("без файла — 404", res.status == 404)
+        res = await client.get("/ipa/..%2F..%2Fetc%2Fpasswd")
+        check("чужой путь не скачать", res.status == 404, str(res.status))
+    finally:
+        await client.close()
+
+    links = ipa_mod.links(with_files)
+    check("ссылка для чата бота", links["sber"] == "https://example.com/ipa/sber",
+          links.get("sber", ""))
+    check("в каталоге бота название стало ссылкой",
+          '<a href="https://example.com/ipa/sber">СберБанк</a>' in catalog.as_text(links))
 
 
 async def main() -> int:
@@ -630,6 +700,7 @@ async def main() -> int:
     await test_notify(cfg, bot, svc)
     await test_close_and_reorder(cfg, bot, svc)
     await test_app_orders(cfg, bot, svc)
+    await test_ipa(cfg, bot, svc)
 
     await db.close()
 

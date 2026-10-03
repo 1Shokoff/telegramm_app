@@ -94,6 +94,7 @@ class Config:
     doc_urls: tuple[tuple[str, str], ...]
     order_prefix: str
     db_path: str
+    ipa_dir: Path
     host: str
     port: int
     init_data_ttl: int
@@ -235,6 +236,7 @@ def load_config() -> Config:
         ),
         order_prefix=_s("ORDER_PREFIX", "NP"),
         db_path=_s("DB_PATH", "/data/bot.sqlite3"),
+        ipa_dir=Path(_s("IPA_DIR") or (ROOT / "files")),
         host=_s("HOST", "0.0.0.0"),
         port=_i("PORT", 8080),
         init_data_ttl=_i("INIT_DATA_TTL", 86400),

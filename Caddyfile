@@ -9,7 +9,10 @@
 }
 
 {$DOMAIN} {
-	encode gzip zstd
+	# Сборки .ipa — уже архивы: сжимать их заново значит греть процессор
+	# впустую и ломать докачку по частям.
+	@compressible not path /ipa/*
+	encode @compressible gzip zstd
 
 	header {
 		# Mini App грузится внутри Telegram — рамку разрешаем, остальное закрываем.

@@ -120,19 +120,36 @@ function flowline(step) {
   )).join('<span class="sep">→</span>') + '</div>';
 }
 
+/* Версия и минимальная iOS берутся из самой сборки, лежащей на сервере. */
+function buildMeta(build) {
+  const parts = [];
+  if (build.version) parts.push('Версия ' + build.version);
+  if (build.minOs) parts.push('iOS ' + build.minOs + '+');
+  return parts.length ? '<span class="app-meta">' + esc(parts.join(' · ')) + '</span>' : '';
+}
+
 function appCard(app, index) {
+  const build = app.build;
   // --i задаёт задержку появления: карточки выкладываются волной.
   return (
-    '<button type="button" class="app-card" style="--i:' + (index || 0) + '" ' +
-      'data-action="pick-app:' + esc(app.slug) + '" ' +
-      'aria-label="' + esc(app.name) + ' — оформить">' +
-    '<span class="arrow">↗</span>' +
-    iconHtml(app) +
-    '<span class="name">' + esc(app.name) + '</span>' +
-    '<span class="cat">' + esc(app.category) + '</span>' +
-    (app.desc ? '<span class="desc">' + esc(app.desc) + '</span>' : '') +
-    '<span class="price">' + esc(app.priceText) + '</span>' +
-    '</button>'
+    '<div class="app-card" style="--i:' + (index || 0) + '">' +
+      '<button type="button" class="app-open" ' +
+        'data-action="pick-app:' + esc(app.slug) + '" ' +
+        'aria-label="' + esc(app.name) + ' — оформить">' +
+      '<span class="arrow">↗</span>' +
+      iconHtml(app) +
+      '<span class="name">' + esc(app.name) + '</span>' +
+      '<span class="cat">' + esc(app.category) + '</span>' +
+      (build ? buildMeta(build) : '') +
+      (app.desc ? '<span class="desc">' + esc(app.desc) + '</span>' : '') +
+      '<span class="price">' + esc(app.priceText) + '</span>' +
+      '</button>' +
+      (build
+        ? '<a class="app-get" href="' + esc(build.url) + '" ' +
+            'data-action="ipa:' + esc(app.slug) + '">↓ .ipa · ' +
+            esc(build.sizeText) + '</a>'
+        : '') +
+    '</div>'
   );
 }
 
@@ -1645,6 +1662,14 @@ function handleAction(raw) {
     const url = 'https://t.me/' + value;
     if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
     else window.open(url, '_blank');
+    return;
+  }
+  if (kind === 'ipa') {
+    haptic('light');
+    const url = location.origin + '/ipa/' + value;
+    // Внутри Telegram файл сохраняет системный браузер: его и открываем.
+    if (tg && tg.openLink) tg.openLink(url);
+    else window.location.href = url;
     return;
   }
   if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
