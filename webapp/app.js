@@ -1752,31 +1752,6 @@ function applyTheme() {
   try { if (tg) { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } } catch (e) { /* старый клиент */ }
 }
 
-/* Какой экран просила ссылка.
-
-   В Telegram параметр приходит из ссылки вида
-   https://t.me/<бот>/<приложение>?startapp=pay — клиент кладёт его
-   в start_param. В обычном браузере читаем его же из адреса.
-
-   «Оплата» — это экран заказа: пока заказа нет, он показывает оформление,
-   потому что согласие с условиями покупатель даёт сам, а не по ссылке. */
-const START_VIEWS = {
-  pay: 'order',
-  order: 'order',
-  catalog: 'home',
-  home: 'home',
-  about: 'about',
-  help: 'help',
-};
-
-function startView() {
-  const fromTelegram = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
-  const url = new URLSearchParams(location.search);
-  const param = String(fromTelegram || url.get('startapp') || url.get('view') || '')
-    .trim().toLowerCase();
-  return START_VIEWS[param] || '';
-}
-
 async function boot() {
   applyTheme();
   applyInsets();
@@ -1804,16 +1779,6 @@ async function boot() {
     state.boot = await api('/api/bootstrap');
     // Незакрытый заказ важнее витрины — открываем сразу на нём.
     if (state.boot.order && state.boot.order.isOpen) state.view = 'order';
-    // Ссылка с ?startapp=... открывает нужный экран сразу.
-    const wanted = startView();
-    if (wanted) {
-      state.view = wanted;
-      // У вернувшегося покупателя ссылка на оплату открывает новый заказ,
-      // а не карточку выполненного.
-      if (wanted === 'order' && state.boot.order && !state.boot.order.isOpen) {
-        state.newOrder = true;
-      }
-    }
   } catch (err) {
     // Открыли в браузере, а не из бота: показываем витрину только для чтения.
     if (tg && tg.initData) {
@@ -1822,8 +1787,6 @@ async function boot() {
       try {
         state.boot = await api('/api/public');
         state.public = true;
-        // Гостю доступны только витрина и «О нас»: заказа у него нет.
-        if (startView() === 'about') state.view = 'about';
       } catch (publicErr) {
         state.error = publicErr.message;
       }
