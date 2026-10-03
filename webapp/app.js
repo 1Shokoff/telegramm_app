@@ -654,6 +654,12 @@ function instructionBlock(order) {
       '<p class="muted">Всё делается в двух ботах: сначала получаем сертификат, ' +
         'потом подписываем и ставим приложение.</p>' +
       '<div class="instr-bots">' + bots + '</div>' +
+      (data.sources
+        ? '<div class="instr-sources">' +
+            '<div class="instr-sources-title">📌 ' + esc(data.sources.title) + '</div>' +
+            '<div class="instr-sources-text">' + withBotLinks(data.sources.text) + '</div>' +
+          '</div>'
+        : '') +
       (order.hasUdid
         ? '<div class="req-row"><span class="req-text">' +
             '<span class="req-label">Ваш UDID</span>' +

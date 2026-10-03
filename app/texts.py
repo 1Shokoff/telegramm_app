@@ -192,6 +192,17 @@ def instruction_message(order: dict, webapp_enabled: bool) -> str:
         lines.append("• @%s — %s" % (e(bot["username"]), e(bot["hint"])))
     lines.append("")
 
+    # Где взять сам .ipa — это первый вопрос после получения сертификата.
+    sources = instruction_mod.sources()
+    lines.append("📌 <b>%s</b>" % e(sources["title"]))
+    lines.append(
+        e(sources["text"]).replace(
+            "@%s" % sources["channel"],
+            '<a href="%s">@%s</a>' % (sources["url"], e(sources["channel"])),
+        )
+    )
+    lines.append("")
+
     for number, step in enumerate(instruction_mod.STEPS, start=1):
         lines.append("<b>%d. %s</b>" % (number, e(step["title"])))
         lines.append(e(step["subtitle"]))

@@ -18,6 +18,18 @@ BOTS = (
     {"username": SIGNER_BOT, "title": "iSign", "hint": "подпись и установка приложения"},
 )
 
+# Канал с готовыми .ipa — покупателю нужно знать, где взять сам файл.
+CHANNEL = "iAppki"
+
+SOURCES = {
+    "title": "Где взять IPA-файлы?",
+    "text": (
+        "Скачивайте приложения в нашем Telegram-канале — @%s. "
+        "Также вы можете использовать свои .ipa-файлы или скачивать их "
+        "из других источников." % CHANNEL
+    ),
+}
+
 
 def _step(title: str, subtitle: str, hint: str) -> dict:
     """Шаг: что сделать, как именно и подпись под кадром."""
@@ -93,3 +105,8 @@ def public_steps() -> list[dict]:
 
 def bot_links() -> list[dict]:
     return [dict(bot, url="https://t.me/%s" % bot["username"]) for bot in BOTS]
+
+
+def sources() -> dict:
+    """Блок «Где взять IPA-файлы» для витрины: текст плюс ссылка на канал."""
+    return dict(SOURCES, channel=CHANNEL, url="https://t.me/%s" % CHANNEL)

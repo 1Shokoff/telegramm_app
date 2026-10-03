@@ -245,6 +245,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "instruction": {
                 "steps": instruction_mod.public_steps(),
                 "bots": instruction_mod.bot_links(),
+                "sources": instruction_mod.sources(),
             },
             "privacy": texts.PRIVACY,
             "testUdid": udid_mod.TEST_UDID if cfg.dev_mode else None,

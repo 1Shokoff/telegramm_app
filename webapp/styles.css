@@ -482,6 +482,24 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 .instr-mention { color: var(--slide-green); text-decoration: none; border-bottom: 1px solid #c6ff5555; }
 
+/* Где взять .ipa — блок между ботами и UDID. Стоит на светлой подложке,
+   поэтому упоминание канала берёт цвет темы, а не салатовый со слайда. */
+.instr-sources {
+  margin: 10px 0 2px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.instr-sources-title { font-weight: 660; font-size: 14px; margin-bottom: 4px; }
+.instr-sources-text {
+  color: var(--muted);
+  font-size: 13px; line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.instr-sources .instr-mention { color: var(--accent); border-bottom-color: #c8ff3155; }
+:root[data-theme="light"] .instr-sources .instr-mention { color: #486500; border-bottom-color: #48650055; }
+
 .instr-swipe {
   color: var(--muted); font-size: 12px;
   margin: 16px 0 10px;

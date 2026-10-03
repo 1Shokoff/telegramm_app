@@ -180,6 +180,8 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     check("в инструкции есть шаги шаблона", "Введите свой UDID" in sent, sent[:120])
     check("в инструкции есть боты",
           "@iRegerBot" in sent and "@isignerbot" in sent)
+    check("в инструкции сказано, где взять IPA", "Где взять IPA-файлы" in sent)
+    check("канал в инструкции — ссылкой", 'href="https://t.me/iAppki">@iAppki</a>' in sent, sent[:200])
 
     try:
         await svc.send_instruction(order["id"], "seller:%d" % SELLER)
@@ -379,6 +381,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
               == ["/static/img/instruction/step-01.webp", "/static/img/instruction/step-02.webp"])
         check("в шаблоне два бота",
               [b["username"] for b in data["instruction"]["bots"]] == ["iRegerBot", "isignerbot"])
+        sources = data["instruction"]["sources"]
+        check("витрине отдаётся блок про IPA-файлы",
+              sources["title"] == "Где взять IPA-файлы?" and "@iAppki" in sources["text"])
+        check("у блока есть ссылка на канал", sources["url"] == "https://t.me/iAppki")
 
         about = data["about"]
         check("в витрине есть реквизиты продавца",
