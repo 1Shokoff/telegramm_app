@@ -598,13 +598,6 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .instr-tick { flex: 1; height: 3px; border-radius: 2px; background: var(--slide-off); }
 .instr-tick.on { background: var(--slide-green); }
 
-.instr-note {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-.instr-note-title { font-weight: 660; margin-bottom: 6px; }
-
 /* --------------------------------------------------------------- подвал */
 
 /* Реквизиты и документы — на каждом экране витрины и на каждой странице. */

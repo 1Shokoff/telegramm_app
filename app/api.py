@@ -157,8 +157,6 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "productName": catalog.product_name(order.get("app_slug")),
         "udidMasked": udid_mod.mask(order.get("device_udid")),
         "hasUdid": bool(order.get("device_udid")),
-        # instruction — примечание продавца к шаблону, может быть пустым.
-        "instruction": order.get("instruction"),
         "instructionReady": order["status"] == const.DONE,
         "note": order.get("seller_note"),
         "createdAt": order["created_at"],
@@ -243,7 +241,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
             "about": about_block(cfg),
-            # Шаблон инструкции: витрина показывает его, когда продавец отправил.
+            # Шаги инструкции: витрина показывает их на выполненном заказе.
             "instruction": {
                 "steps": instruction_mod.public_steps(),
                 "bots": instruction_mod.bot_links(),
@@ -603,9 +601,7 @@ async def seller_action(request: web.Request) -> web.Response:
     elif action == "payno":
         order = await svc.reject_payment(order_id, actor)
     elif action == "installed":
-        order = await svc.mark_installed(order_id, actor)
-    elif action == "instruction":
-        order = await svc.send_instruction(order_id, str(data.get("text", "")), actor)
+        order = await svc.send_instruction(order_id, actor)
     elif action == "cancel":
         order = await svc.cancel(order_id, actor, by_seller=True)
     elif action == "note":

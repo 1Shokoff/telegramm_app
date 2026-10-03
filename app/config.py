@@ -84,7 +84,6 @@ class Config:
     pay_card: str
     pay_name: str
     pay_amount: str
-    instruction_template: str
     telegram_proxy: str
     bot_username: str
     legal_name: str
@@ -223,7 +222,6 @@ def load_config() -> Config:
         pay_card=_s("PAY_CARD"),
         pay_name=_s("PAY_NAME"),
         pay_amount=_s("PAY_AMOUNT"),
-        instruction_template=_multiline("INSTRUCTION_TEMPLATE"),
         telegram_proxy=proxy,
         bot_username=_s("BOT_USERNAME").lstrip("@"),
         legal_name=_s("LEGAL_NAME"),

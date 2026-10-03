@@ -209,38 +209,24 @@ class OrderService:
         await self.push_order_to_sellers(updated, "📱 <b>Получен UDID</b>", const.NOTIFY_UDID)
         return updated
 
-    async def mark_installed(self, order_id: int, actor: str) -> dict:
-        order = await self._load(order_id)
-        if order["status"] != const.UDID:
-            raise ServiceError("Ожидался статус «Ставим сертификат».")
-        updated = await db.set_status(order_id, const.INSTALLED, actor, "сертификат установлен")
-        assert updated
-        await self.notify_buyer(
-            updated,
-            "📲 <b>Сертификат установлен</b>\n\n"
-            "Осталось получить инструкцию — пришлём её сюда.",
-            const.NOTIFY_STATUS,
-        )
-        return updated
+    async def send_instruction(self, order_id: int, actor: str) -> dict:
+        """Кнопка «Сертификат установлен»: заказ закрывается и уходит инструкция.
 
-    async def send_instruction(self, order_id: int, text: str, actor: str) -> dict:
-        """Отправляет покупателю готовую инструкцию; text — примечание к ней.
-
-        Примечание необязательно: сами шаги лежат в шаблоне, продавцу остаётся
-        добавить только то, что относится к этому заказу.
+        Инструкция одна на всех — шаги лежат в `app/instruction.py`, поэтому
+        писать продавцу нечего и промежуточный статус заказу не нужен.
+        Статус INSTALLED встречается только у заказов, заведённых до этого.
         """
         order = await self._load(order_id)
         if order["status"] not in (const.UDID, const.INSTALLED):
-            raise ServiceError("Инструкция отправляется после установки сертификата.")
-        note = (text or "").strip()
-        if len(note) > self.MESSAGE_LIMIT:
-            raise ServiceError("Примечание слишком длинное.")
+            raise ServiceError("Инструкция отправляется после получения UDID.")
 
-        updated = await db.set_instruction(order_id, note, actor)
+        updated = await db.set_status(
+            order_id, const.DONE, actor, "сертификат установлен, инструкция отправлена"
+        )
         assert updated
         await self.notify_buyer(
             updated,
-            texts.instruction_message(updated, note, self.cfg.webapp_enabled),
+            texts.instruction_message(updated, self.cfg.webapp_enabled),
             const.NOTIFY_STATUS,
         )
         return updated

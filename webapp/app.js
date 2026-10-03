@@ -19,7 +19,7 @@ const state = {
   agreeTerms: false,
   agreeUdid: false,
   busy: false,
-  seller: { status: 'open', q: '', orders: [], counts: {}, current: null, instruction: '' },
+  seller: { status: 'open', q: '', orders: [], counts: {}, current: null },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
   notify: { kinds: [], order: null, modes: [], from: 'help' },
 };
@@ -664,12 +664,6 @@ function instructionBlock(order) {
       '<ol class="instr-steps" tabindex="0" aria-label="Шаги инструкции">' +
         data.steps.map((step) => instructionStep(step, data.steps.length)).join('') +
       '</ol>' +
-      (order.instruction
-        ? '<div class="instr-note">' +
-            '<div class="instr-note-title">Примечание продавца</div>' +
-            '<div class="body" style="white-space:pre-wrap">' + esc(order.instruction) + '</div>' +
-          '</div>'
-        : '') +
     '</div>'
   );
 }
@@ -914,9 +908,12 @@ function sellerActions(o) {
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:payok">Оплата получена</button>');
     buttons.push('<button class="btn btn-secondary btn-sm" data-action="seller-act:payno">Платёж не найден</button>');
   } else if (o.status === 'udid') {
+    // Одна кнопка закрывает заказ: покупателю сразу уходит готовая инструкция.
     buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:installed">Сертификат установлен</button>');
+  } else if (o.status === 'installed') {
+    // Заказы, застрявшие на этом статусе до объединения шагов.
+    buttons.push('<button class="btn btn-primary btn-sm" data-action="seller-act:installed">Отправить инструкцию</button>');
   }
-  // На шаге «Инструкция» кнопка не нужна: ниже стоит форма отправки.
   if (!buttons.length) return '';
   return '<div class="btn-row mt">' + buttons.join('') + '</div>';
 }
@@ -936,20 +933,6 @@ function viewSellerOrder(o) {
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
       sellerActions(o) +
     '</div>' +
-    (o.status === 'installed'
-      ? '<div class="section-head mt"><h2>Инструкция</h2></div>' +
-        '<div class="card">' +
-          '<p class="muted">Покупатель получит готовую инструкцию из ' +
-            ((state.boot.instruction && state.boot.instruction.steps.length) || 10) +
-            ' шагов со скриншотами. Ниже можно добавить примечание к этому заказу — ' +
-            'оно встанет в конце инструкции. Поле можно оставить пустым.</p>' +
-          '<label class="field"><span>Текст инструкции</span>' +
-          '<textarea id="instrText" placeholder="Например: сертификат действует до 25 октября">' +
-            esc(state.seller.instruction || '') + '</textarea></label>' +
-          '<button class="btn btn-primary mt" data-action="seller-send-instr">' +
-            'Отправить инструкцию</button>' +
-        '</div>'
-      : '') +
     '<button class="btn btn-secondary" data-action="seller-notify">🔔 Уведомления по заказу</button>' +
     '<button class="btn btn-secondary mt" data-action="seller-chat">💬 Переписка' +
       (o.unread ? ' <span class="count-badge">' + o.unread + '</span>' : '') + '</button>' +
@@ -1339,8 +1322,6 @@ function bindInputs() {
     chatInput.focus();
   }
 
-  const instr = document.getElementById('instrText');
-  if (instr) instr.addEventListener('input', () => { state.seller.instruction = instr.value; });
 }
 
 /* ----------------------------------------------------------------- действия */
@@ -1439,6 +1420,8 @@ async function loadSellerOrders() {
   state.seller.counts = data.counts || {};
 }
 
+const SELLER_ACTION_DONE = { installed: 'Инструкция отправлена покупателю' };
+
 async function sellerAction(action, extra) {
   const current = state.seller.current;
   if (!current) return;
@@ -1446,7 +1429,7 @@ async function sellerAction(action, extra) {
   const data = await api('/api/seller/action', { method: 'POST', body });
   state.seller.current = data.order;
   await loadSellerOrders();
-  toast('Готово');
+  toast(SELLER_ACTION_DONE[action] || 'Готово');
 }
 
 const actions = {
@@ -1633,12 +1616,6 @@ const actions = {
   'doc-back': () => { state.view = state.doc.from || 'about'; render(); },
 
   'seller-back': () => { state.seller.current = null; render(); },
-
-  'seller-send-instr': () => guard(async () => {
-    await sellerAction('instruction', { text: state.seller.instruction });
-    state.seller.instruction = '';
-    render();
-  }),
 };
 
 function handleAction(raw) {
@@ -1685,7 +1662,6 @@ function handleAction(raw) {
   }
   if (kind === 'seller-open') {
     state.seller.current = state.seller.orders.find((o) => String(o.id) === value) || null;
-    state.seller.instruction = '';
     render();
     return;
   }

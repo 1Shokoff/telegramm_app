@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from .. import const, db, instruction, keyboards, texts
+from .. import const, db, keyboards, texts
 from ..config import Config
 from ..service import OrderService, ServiceError
 
@@ -17,7 +17,6 @@ router = Router(name="seller")
 
 
 class SellerFlow(StatesGroup):
-    instruction = State()
     note = State()
     reply = State()
 
@@ -243,13 +242,13 @@ async def cb_installed(call: CallbackQuery, service: OrderService) -> None:
     if not parsed:
         return
     try:
-        order = await service.mark_installed(parsed[1], _actor(call))
+        order = await service.send_instruction(parsed[1], _actor(call))
     except ServiceError as exc:
         await call.answer(str(exc), show_alert=True)
         return
     text, kb = await _card(order)
     await call.message.edit_text(text, reply_markup=kb)
-    await call.answer("Отмечено. Следующий шаг — инструкция")
+    await call.answer("Инструкция отправлена покупателю")
 
 
 @router.callback_query(F.data.startswith("o:scancel:"))
@@ -265,63 +264,6 @@ async def cb_scancel(call: CallbackQuery, service: OrderService) -> None:
     text, kb = await _card(order)
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer("Заказ отменён")
-
-
-@router.callback_query(F.data.startswith("o:instr:"))
-async def cb_instr(call: CallbackQuery, state: FSMContext, cfg: Config) -> None:
-    parsed = keyboards.parse_cb(call.data)
-    if not parsed:
-        return
-    order = await db.get_order(parsed[1])
-    if not order:
-        await call.answer("Заказ не найден", show_alert=True)
-        return
-    await state.set_state(SellerFlow.instruction)
-    await state.update_data(order_id=order["id"])
-    template = cfg.instruction_template
-    hint = "\n\n<b>Шаблон:</b>\n%s" % texts.e(template) if template else ""
-    await call.message.answer(
-        "Заказ <b>%s</b>: покупатель получит готовую инструкцию из %d шагов "
-        "со скриншотами.\n\nПришлите примечание одним сообщением — оно встанет "
-        "в конце, — или отправьте инструкцию без него.%s"
-        % (texts.e(order["code"]), len(instruction.STEPS), hint),
-        reply_markup=keyboards.instruction_prompt_kb(order["id"], bool(template), plain=True),
-    )
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("o:instrgo:"))
-async def cb_instruction_plain(call: CallbackQuery, state: FSMContext, service: OrderService) -> None:
-    """Отправка шаблона без примечания."""
-    parsed = keyboards.parse_cb(call.data)
-    if not parsed:
-        return
-    try:
-        order = await service.send_instruction(parsed[1], "", _actor(call))
-    except ServiceError as exc:
-        await call.answer(str(exc), show_alert=True)
-        return
-    await state.clear()
-    text, kb = await _card(order)
-    await call.message.answer("Инструкция отправлена.\n\n" + text, reply_markup=kb)
-    await call.answer("Отправлено")
-
-
-@router.callback_query(F.data.startswith("o:tmpl:"))
-async def cb_template(call: CallbackQuery, state: FSMContext, cfg: Config, service: OrderService) -> None:
-    parsed = keyboards.parse_cb(call.data)
-    if not parsed or not cfg.instruction_template:
-        await call.answer()
-        return
-    try:
-        order = await service.send_instruction(parsed[1], cfg.instruction_template, _actor(call))
-    except ServiceError as exc:
-        await call.answer(str(exc), show_alert=True)
-        return
-    await state.clear()
-    text, kb = await _card(order)
-    await call.message.answer(text, reply_markup=kb)
-    await call.answer("Инструкция отправлена")
 
 
 @router.callback_query(F.data.startswith("o:bell:"))
@@ -364,7 +306,7 @@ async def cb_chat(call: CallbackQuery, state: FSMContext) -> None:
     await call.message.answer(
         texts.chat_history(order, messages)
         + "\n\nПришлите ответ одним сообщением — он уйдёт покупателю.",
-        reply_markup=keyboards.instruction_prompt_kb(order["id"], has_template=False),
+        reply_markup=keyboards.cancel_kb(order["id"]),
     )
     await call.answer()
 
@@ -388,21 +330,3 @@ async def take_reply(message: Message, state: FSMContext, service: OrderService)
         "Отправлено покупателю по заказу %s." % texts.e(order["code"] if order else ""),
         reply_markup=keyboards.seller_chat_kb(order_id),
     )
-
-
-@router.message(StateFilter(SellerFlow.instruction), F.text)
-async def take_instruction(message: Message, state: FSMContext, service: OrderService) -> None:
-    data = await state.get_data()
-    order_id = data.get("order_id")
-    if not order_id:
-        await state.clear()
-        await message.answer("Не понял, к какому заказу это относится. Откройте карточку заново.")
-        return
-    try:
-        order = await service.send_instruction(order_id, message.text, _actor(message))
-    except ServiceError as exc:
-        await message.answer("%s" % texts.e(str(exc)))
-        return
-    await state.clear()
-    text, kb = await _card(order)
-    await message.answer("Отправлено покупателю.\n\n" + text, reply_markup=kb)

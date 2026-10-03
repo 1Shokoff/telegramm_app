@@ -114,9 +114,11 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
     elif status == const.PAID:
         rows.append([InlineKeyboardButton(text="⏳ Ждём UDID от покупателя", callback_data=cb("noop", oid))])
     elif status == const.UDID:
+        # Одна кнопка закрывает заказ: покупателю сразу уходит готовая инструкция.
         rows.append([InlineKeyboardButton(text="📲 Сертификат установлен", callback_data=cb("installed", oid))])
     elif status == const.INSTALLED:
-        rows.append([InlineKeyboardButton(text="📄 Отправить инструкцию", callback_data=cb("instr", oid))])
+        # Заказы, застрявшие на этом статусе до объединения шагов.
+        rows.append([InlineKeyboardButton(text="📄 Отправить инструкцию", callback_data=cb("installed", oid))])
 
     rows.append(
         [
@@ -177,14 +179,6 @@ def seller_chat_kb(order_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def instruction_prompt_kb(order_id: int, has_template: bool, plain: bool = False) -> InlineKeyboardMarkup:
-    """Клавиатура под запросом текста. plain — можно отправить без примечания."""
-    rows = []
-    if plain:
-        rows.append([
-            InlineKeyboardButton(text="Отправить без примечания", callback_data=cb("instrgo", order_id))
-        ])
-    if has_template:
-        rows.append([InlineKeyboardButton(text="Отправить шаблон", callback_data=cb("tmpl", order_id))])
-    rows.append([InlineKeyboardButton(text="Отмена", callback_data=cb("card", order_id))])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def cancel_kb(order_id: int) -> InlineKeyboardMarkup:
+    """Выход из ожидания сообщения: возвращает карточку заказа."""
+    return _rows([InlineKeyboardButton(text="Отмена", callback_data=cb("card", order_id))])

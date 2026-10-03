@@ -30,7 +30,6 @@ os.environ.update(
         "PAY_BANK": "Сбербанк",
         "PAY_NAME": "Тестов Т. Т.",
         "PAY_CARD": "2202 2000 0000 0000",
-        "INSTRUCTION_TEMPLATE": "Шаг 1\\nШаг 2",
         "PRICE_RUB": "3000",
         "ORDER_PREFIX": "NP",
         "LEGAL_NAME": "Самозанятый Тестов Т. Т.",
@@ -174,25 +173,19 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     order = await svc.submit_udid(order["id"], SPACED_UDID, BUYER)
     check("UDID сохранён", order["device_udid"] == udid_mod.TEST_UDID and order["status"] == const.UDID)
 
-    try:
-        await svc.send_instruction(order["id"], "текст", "seller:%d" % SELLER)
-        order = await db.get_order(order["id"])
-        check("инструкция до установки", order["status"] == const.DONE)
-    except ServiceError:
-        check("инструкция до установки разрешена", True)
-
-    order = await db.set_status(order["id"], const.UDID, "test")
-    order = await svc.mark_installed(order["id"], "seller:%d" % SELLER)
-    check("статус: сертификат установлен", order["status"] == const.INSTALLED)
-
-    order = await svc.send_instruction(order["id"], "Профиль → Настройки → Основные", "seller:%d" % SELLER)
-    check("статус: готово", order["status"] == const.DONE)
+    order = await svc.send_instruction(order["id"], "seller:%d" % SELLER)
+    check("кнопка продавца сразу закрывает заказ", order["status"] == const.DONE)
     sent = bot.to(BUYER)[-1]
     check("инструкция ушла покупателю", "Инструкция по заказу" in sent)
     check("в инструкции есть шаги шаблона", "Введите свой UDID" in sent, sent[:120])
     check("в инструкции есть боты",
           "@iRegerBot" in sent and "@isignerbot" in sent)
-    check("примечание продавца в конце", "Профиль → Настройки → Основные" in sent)
+
+    try:
+        await svc.send_instruction(order["id"], "seller:%d" % SELLER)
+        check("повторная отправка отклонена", False)
+    except ServiceError:
+        check("повторная отправка отклонена", True)
 
     events = await db.list_events(order["id"])
     check("история пишется", len(events) >= 5, "событий: %d" % len(events))
@@ -299,8 +292,7 @@ async def test_close_and_reorder(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("заказ в работе покупатель не отменяет", True)
 
     order = await svc.submit_udid(order["id"], udid_mod.TEST_UDID, BUYER)
-    order = await svc.mark_installed(order["id"], "test")
-    order = await svc.send_instruction(order["id"], "Готовая инструкция", "test")
+    order = await svc.send_instruction(order["id"], "test")
     check("заказ выполнен", order["status"] == const.DONE)
 
     same, created = await svc.get_or_create_order(BUYER)
@@ -470,17 +462,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
             headers=seller_headers,
             json={"action": "installed", "orderId": order["id"]},
         )
-        check("сертификат отмечен", (await res.json())["order"]["status"] == const.INSTALLED)
-
-        # Примечание необязательно: шаги покупатель получает из шаблона.
-        res = await client.post(
-            "/api/seller/action",
-            headers=seller_headers,
-            json={"action": "instruction", "orderId": order["id"], "text": ""},
-        )
         done = (await res.json())["order"]
-        check("инструкция отправлена без примечания",
+        check("кнопка продавца сразу шлёт инструкцию",
               done["status"] == const.DONE and done["instructionReady"] is True)
+        check("примечания продавца в заказе нет", "instruction" not in done)
 
         res = await client.get("/api/seller/orders?status=all", headers=seller_headers)
         data = await res.json()
@@ -624,7 +609,6 @@ async def main() -> int:
     check("иконка банка найдена по названию", rows["bank"]["icon"] == "sber", rows["bank"]["icon"])
     check("иконка СБП у телефона", rows["phone"]["icon"] == "sbp")
     check("сумма к переводу берётся из цены заказа", cfg.amount_text(3000) == "3 000 ₽")
-    check("шаблон инструкции разобран", "\n" in cfg.instruction_template)
 
     tmp = tempfile.mkdtemp()
     await db.init(os.path.join(tmp, "test.sqlite3"))

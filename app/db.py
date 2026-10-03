@@ -315,14 +315,6 @@ async def set_udid(order_id: int, udid: str, actor: str) -> dict | None:
     return await set_status(order_id, const.UDID, actor, "UDID получен")
 
 
-async def set_instruction(order_id: int, text: str, actor: str) -> dict | None:
-    await conn().execute(
-        "UPDATE orders SET instruction = ?, updated_at = ? WHERE id = ?", (text, now(), order_id)
-    )
-    await conn().commit()
-    return await set_status(order_id, const.DONE, actor, "инструкция отправлена")
-
-
 async def set_note(order_id: int, note: str) -> None:
     await conn().execute(
         "UPDATE orders SET seller_note = ?, updated_at = ? WHERE id = ?", (note, now(), order_id)

@@ -177,8 +177,8 @@ def payment_instructions(order: dict, cfg: Config) -> str:
     return "\n".join(lines)
 
 
-def instruction_message(order: dict, note: str, webapp_enabled: bool) -> str:
-    """Инструкция в чат бота: шаги текстом, ссылки на ботов и примечание.
+def instruction_message(order: dict, webapp_enabled: bool) -> str:
+    """Инструкция в чат бота: шаги текстом и ссылки на ботов.
 
     Картинки шагов живут в витрине — сюда идёт только текст, иначе в чат
     прилетело бы десять тяжёлых слайдов.
@@ -200,11 +200,6 @@ def instruction_message(order: dict, note: str, webapp_enabled: bool) -> str:
     udid = order.get("device_udid")
     if udid:
         lines.append("Ваш UDID: <code>%s</code>" % e(udid))
-        lines.append("")
-
-    if note:
-        lines.append("<b>От продавца</b>")
-        lines.append(e(note))
         lines.append("")
 
     if webapp_enabled:

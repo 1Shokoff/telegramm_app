@@ -309,13 +309,11 @@ async def main() -> int:
     bot.reset()
     await dp.feed_update(bot, callback_update(SELLER, "o:installed:%d" % order["id"]))
     order = await db.get_order(order["id"])
-    check("сертификат отмечен", order["status"] == const.INSTALLED)
-
-    await dp.feed_update(bot, callback_update(SELLER, "o:instr:%d" % order["id"]))
-    await dp.feed_update(bot, message_update(SELLER, "Откройте Настройки → Профиль и доверьте сертификат"))
-    order = await db.get_order(order["id"])
-    check("инструкция отправлена", order["status"] == const.DONE)
-    check("покупатель получил текст", any("Настройки" in t for t in bot.texts_to(BUYER)))
+    check("кнопка продавца закрывает заказ", order["status"] == const.DONE)
+    check("покупатель получил инструкцию",
+          any("Инструкция по заказу" in t for t in bot.texts_to(BUYER)))
+    check("в инструкции есть шаги",
+          any("Введите свой UDID" in t for t in bot.texts_to(BUYER)))
 
     print("\nПереписка")
     bot.reset()
