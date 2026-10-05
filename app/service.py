@@ -67,6 +67,29 @@ class OrderService:
         for seller_id in self.cfg.seller_ids:
             await self.send(seller_id, text, kb, kind=kind, order_id=order_id)
 
+    async def notify_suppliers(
+        self,
+        text: str,
+        kb: InlineKeyboardMarkup | None = None,
+        kind: str | None = None,
+        order_id: int | None = None,
+    ) -> None:
+        """Продавцу, который заодно и поставщик, второе сообщение не нужно:
+        полную карточку он уже получил."""
+        for supplier_id in self.cfg.supplier_ids:
+            if self.cfg.is_seller(supplier_id):
+                continue
+            await self.send(supplier_id, text, kb, kind=kind, order_id=order_id)
+
+    async def push_order_to_suppliers(self, order: dict, kind: str) -> None:
+        full = await self._with_user(order)
+        await self.notify_suppliers(
+            texts.supplier_new_order(full),
+            keyboards.supplier_order_kb(order),
+            kind=kind,
+            order_id=order["id"],
+        )
+
     async def push_order_to_sellers(self, order: dict, header: str, kind: str) -> None:
         full = await self._with_user(order)
         text = header + "\n\n" + texts.seller_order_card(full)
@@ -130,6 +153,7 @@ class OrderService:
             "оферта, политика и согласие на обработку данных",
         )
         await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>", const.NOTIFY_NEW_ORDER)
+        await self.push_order_to_suppliers(order, const.NOTIFY_NEW_ORDER)
         return order, True
 
     async def _load(self, order_id: int) -> dict:

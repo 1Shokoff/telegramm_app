@@ -132,6 +132,13 @@ async def require_seller(request: web.Request) -> auth.WebAppUser:
     return user
 
 
+async def require_supplier(request: web.Request) -> auth.WebAppUser:
+    user = await current_user(request)
+    if not cfg_of(request).is_supplier(user.id):
+        raise ApiError("Недоступно", status=403)
+    return user
+
+
 async def body(request: web.Request) -> dict:
     if not request.can_read_body:
         return {}
@@ -185,6 +192,21 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
     return data
 
 
+def supplier_order_public(order: dict) -> dict:
+    """Заказ для поставщика: только то, что ему положено видеть.
+
+    Ни суммы, ни платежа, ни заметок продавца, ни Telegram ID покупателя.
+    """
+    return {
+        "id": order["id"],
+        "code": order["code"],
+        "firstName": order.get("first_name"),
+        "username": order.get("username"),
+        "createdAt": order["created_at"],
+        "udid": order.get("device_udid"),
+    }
+
+
 def order_id_of(data: dict) -> int:
     """Мусор в orderId — это ошибка запроса, а не падение сервера."""
     try:
@@ -229,6 +251,7 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "firstName": user.first_name,
                 "username": user.username,
                 "isSeller": cfg.is_seller(user.id),
+                "isSupplier": cfg.is_supplier(user.id),
             },
             "product": {
                 "title": cfg.product_title,
@@ -281,7 +304,7 @@ async def public_bootstrap(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "public": True,
-            "user": {"isSeller": False},
+            "user": {"isSeller": False, "isSupplier": False},
             "order": None,
             "product": {
                 "title": cfg.product_title,
@@ -451,11 +474,11 @@ async def post_chat(request: web.Request) -> web.Response:
     return web.json_response({"message": message_public(message, role)})
 
 
-async def notify_payload(user_id: int, is_seller: bool, order: dict | None) -> dict:
+async def notify_payload(user_id: int, role: str, order: dict | None) -> dict:
     prefs = await db.get_notify_prefs(user_id)
     kinds = [
         {"key": key, "title": title, "hint": hint, "enabled": prefs.get(key, True)}
-        for key, title, hint in const.notifications_for(is_seller)
+        for key, title, hint in const.notifications_for(role)
     ]
     order_block = None
     if order:
@@ -478,7 +501,8 @@ async def notify_payload(user_id: int, is_seller: bool, order: dict | None) -> d
 @routes.get("/api/notify")
 async def get_notify(request: web.Request) -> web.Response:
     user = await current_user(request)
-    is_seller = cfg_of(request).is_seller(user.id)
+    role = cfg_of(request).role_of(user.id)
+    is_seller = role == const.ROLE_SELLER
 
     order = None
     raw_order = request.query.get("orderId")
@@ -492,28 +516,29 @@ async def get_notify(request: web.Request) -> web.Response:
     elif not is_seller:
         order = await db.get_active_order(user.id)
 
-    return web.json_response(await notify_payload(user.id, is_seller, order))
+    return web.json_response(await notify_payload(user.id, role, order))
 
 
 @routes.post("/api/notify")
 async def set_notify(request: web.Request) -> web.Response:
     user = await current_user(request)
-    is_seller = cfg_of(request).is_seller(user.id)
+    role = cfg_of(request).role_of(user.id)
     data = await body(request)
 
     kind = str(data.get("kind", ""))
-    allowed = {key for key, _t, _h in const.notifications_for(is_seller)}
+    allowed = {key for key, _t, _h in const.notifications_for(role)}
     if kind not in allowed:
         raise ApiError("Неизвестный вид уведомления: %s" % kind)
 
     await db.set_notify_pref(user.id, kind, bool(data.get("enabled")))
-    return web.json_response(await notify_payload(user.id, is_seller, None))
+    return web.json_response(await notify_payload(user.id, role, None))
 
 
 @routes.post("/api/notify/order")
 async def set_notify_order(request: web.Request) -> web.Response:
     user = await current_user(request)
-    is_seller = cfg_of(request).is_seller(user.id)
+    role = cfg_of(request).role_of(user.id)
+    is_seller = role == const.ROLE_SELLER
     data = await body(request)
 
     order = await db.get_order(order_id_of(data))
@@ -528,7 +553,7 @@ async def set_notify_order(request: web.Request) -> web.Response:
 
     enabled = {const.ORDER_NOTIFY_DEFAULT: None, const.ORDER_NOTIFY_ON: True, const.ORDER_NOTIFY_OFF: False}[mode]
     await db.set_order_notify(user.id, order["id"], enabled)
-    return web.json_response(await notify_payload(user.id, is_seller, order))
+    return web.json_response(await notify_payload(user.id, role, order))
 
 
 @routes.post("/api/order/cancel")
@@ -619,6 +644,17 @@ async def seller_action(request: web.Request) -> web.Response:
         raise ApiError("Неизвестное действие: %s" % action)
 
     return web.json_response({"order": order_public(await with_user(order), full=True)})
+
+
+# ----------------------------------------------------------------- поставщик
+
+
+@routes.get("/api/supplier/orders")
+async def supplier_orders(request: web.Request) -> web.Response:
+    """Список UDID для поставщика. Продавцу эта вкладка не нужна — у него своя."""
+    await require_supplier(request)
+    orders = await db.list_orders_with_udid(limit=100)
+    return web.json_response({"orders": [supplier_order_public(o) for o in orders]})
 
 
 # ------------------------------------------------------------------- статика

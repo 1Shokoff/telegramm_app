@@ -11,6 +11,14 @@ CANCELLED = "cancelled"
 ACTIVE_STATUSES = (NEW, PAYMENT_CHECK, PAID, UDID, INSTALLED, DONE)
 OPEN_STATUSES = (NEW, PAYMENT_CHECK, PAID, UDID, INSTALLED)
 
+# ------------------------------------------------------------------- роли
+
+# Покупатель оформляет заказы, продавец ими управляет, поставщик видит
+# только UDID: номер заказа, покупателя, время создания и сам номер устройства.
+ROLE_BUYER = "buyer"
+ROLE_SELLER = "seller"
+ROLE_SUPPLIER = "supplier"
+
 # Подпись статуса: для покупателя и для продавца.
 TITLES = {
     NEW: "Ожидает оплаты",
@@ -71,8 +79,18 @@ SELLER_NOTIFICATIONS = (
 )
 
 
-def notifications_for(is_seller: bool) -> tuple[tuple[str, str, str], ...]:
-    return SELLER_NOTIFICATIONS if is_seller else BUYER_NOTIFICATIONS
+# Поставщику важен только факт нового заказа — UDID он смотрит сам.
+SUPPLIER_NOTIFICATIONS = (
+    (NOTIFY_NEW_ORDER, "Новые заказы", "Кто-то оформил заказ"),
+)
+
+
+def notifications_for(role: str) -> tuple[tuple[str, str, str], ...]:
+    if role == ROLE_SELLER:
+        return SELLER_NOTIFICATIONS
+    if role == ROLE_SUPPLIER:
+        return SUPPLIER_NOTIFICATIONS
+    return BUYER_NOTIFICATIONS
 
 
 def notification_title(kind: str) -> str:

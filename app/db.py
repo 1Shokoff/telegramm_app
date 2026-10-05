@@ -268,6 +268,17 @@ async def list_orders(
     return await _fetchall(sql, args)
 
 
+async def list_orders_with_udid(limit: int = 50) -> list[dict]:
+    """Заказы с присланным UDID — рабочая очередь поставщика."""
+    return await _fetchall(
+        "SELECT o.*, u.username, u.first_name "
+        "FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id "
+        "WHERE o.device_udid IS NOT NULL AND o.device_udid <> '' "
+        "ORDER BY o.id DESC LIMIT ?",
+        (limit,),
+    )
+
+
 async def status_counts() -> dict[str, int]:
     rows = await _fetchall("SELECT status, COUNT(*) AS n FROM orders GROUP BY status")
     return {r["status"]: r["n"] for r in rows}

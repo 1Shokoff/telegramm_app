@@ -20,9 +20,13 @@ const state = {
   agreeUdid: false,
   busy: false,
   seller: { status: 'open', q: '', orders: [], counts: {}, current: null },
+  supplier: { orders: [], current: null },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
   notify: { kinds: [], order: null, modes: [], from: 'help' },
 };
+
+/* Цену у карточек не показываем: доступ покупается один на весь каталог. */
+const ACCESS_NOTE = 'Входит в полный доступ';
 
 const STEP_LABELS = [
   ['Оплата получена', 'Тестовая покупка подтверждена'],
@@ -131,18 +135,19 @@ function buildMeta(build) {
 function appCard(app, index) {
   const build = app.build;
   // --i задаёт задержку появления: карточки выкладываются волной.
+  // Карточка ведёт на ту же оплату, что и кнопка «Весь каталог»:
+  // отдельных цен по приложениям нет, доступ один на весь каталог.
   return (
     '<div class="app-card" style="--i:' + (index || 0) + '">' +
-      '<button type="button" class="app-open" ' +
-        'data-action="pick-app:' + esc(app.slug) + '" ' +
-        'aria-label="' + esc(app.name) + ' — оформить">' +
+      '<button type="button" class="app-open" data-action="buy-catalog" ' +
+        'aria-label="' + esc(app.name) + ' — оформить доступ ко всему каталогу">' +
       '<span class="arrow">↗</span>' +
       iconHtml(app) +
       '<span class="name">' + esc(app.name) + '</span>' +
       '<span class="cat">' + esc(app.category) + '</span>' +
       (build ? buildMeta(build) : '') +
       (app.desc ? '<span class="desc">' + esc(app.desc) + '</span>' : '') +
-      '<span class="price">' + esc(app.priceText) + '</span>' +
+      '<span class="price">' + ACCESS_NOTE + '</span>' +
       '</button>' +
       (build
         ? '<a class="app-get" href="' + esc(build.url) + '" ' +
@@ -1012,6 +1017,55 @@ async function refreshSellerList() {
   if (list) list.innerHTML = sellerListHtml();
 }
 
+/* ------------------------------------------------------------- поставщик */
+
+function supplierLine(o) {
+  return (
+    '<button class="order-line" data-action="supplier-open:' + o.id + '">' +
+      '<span class="grow"><span class="code">' + esc(o.code) + '</span><br>' +
+      '<span class="meta">' + esc(dateOf(o.createdAt)) +
+      (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
+      '<span class="meta">›</span>' +
+    '</button>'
+  );
+}
+
+function viewSupplierOrder(o) {
+  return (
+    '<button class="backlink" data-action="supplier-back">← Все заказы</button>' +
+    '<div class="section-head"><h2>' + esc(o.code) + '</h2></div>' +
+    '<div class="card">' +
+      '<div class="row"><span class="label">Номер заказа</span><span class="value">' +
+        esc(o.code) + '</span></div>' +
+      '<div class="row"><span class="label">Покупатель</span><span class="value">' +
+        esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
+      '<div class="row"><span class="label">Создан</span><span class="value">' +
+        esc(dateOf(o.createdAt)) + '</span></div>' +
+      '<div class="row"><span class="label">UDID</span><span class="value mono">' +
+        esc(o.udid || '—') + '</span></div>' +
+      (o.udid
+        ? '<div class="mt"><button class="btn btn-primary" data-action="copy:udid">' +
+          'Скопировать UDID</button></div>'
+        : '') +
+    '</div>'
+  );
+}
+
+function viewSupplier() {
+  const s = state.supplier;
+  if (s.current) return viewSupplierOrder(s.current);
+
+  return (
+    '<h1>UDID заказов</h1>' +
+    '<div class="cta-note">Номера устройств по заказам, где покупатель уже прислал UDID.</div>' +
+    '<div class="mt">' +
+      (s.orders.length
+        ? s.orders.map(supplierLine).join('')
+        : '<div class="notice">Присланных UDID пока нет.</div>') +
+    '</div>'
+  );
+}
+
 /* ------------------------------------------------------------------- каркас */
 
 function navIcon(key) {
@@ -1020,6 +1074,7 @@ function navIcon(key) {
     order: '<rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 12h6M9 16h4"/>',
     about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',
     seller: '<rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
+    supplier: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 5.5h3M12 18.5h.01"/>',
   };
   return '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[key] + '</svg>';
 }
@@ -1036,6 +1091,7 @@ function tabbar() {
     ? [['home', 'Главная'], ['about', 'О нас']]
     : [['home', 'Главная'], ['order', 'Мой заказ'], ['about', 'О нас']];
   if (b.user.isSeller) tabs.push(['seller', 'Продавец']);
+  if (b.user.isSupplier) tabs.push(['supplier', 'Поставщик']);
 
   return tabs.map(([key, label]) => (
     '<button class="' + (state.view === key ? 'on' : '') + '" data-action="tab:' + key + '">' +
@@ -1053,6 +1109,7 @@ function screenKey() {
     return 'order:' + (o ? o.id + ':' + o.status : 'none');
   }
   if (state.view === 'seller') return 'seller:' + (state.seller.current ? state.seller.current.id : 'list');
+  if (state.view === 'supplier') return 'supplier:' + (state.supplier.current ? state.supplier.current.id : 'list');
   return state.view;
 }
 
@@ -1069,6 +1126,7 @@ function render() {
   const views = {
     home: viewHome, order: viewOrder, about: viewAbout, doc: viewDoc,
     help: viewHelp, seller: viewSeller, chat: viewChat, notify: viewNotify,
+    supplier: viewSupplier,
   };
   document.body.classList.toggle('chat-mode', state.view === 'chat');
   // На витрине каталог занимает всю ширину, остальные экраны — колонка
@@ -1103,14 +1161,15 @@ function render() {
   state.screen = key;
 }
 
-const TABS = ['home', 'order', 'about', 'seller'];
+const TABS = ['home', 'order', 'about', 'seller', 'supplier'];
 
 function updateBackButton() {
   if (!tg || !tg.BackButton) return;
   // Разделы нижнего ряда — верхний уровень. Помощь из шапки, переписка,
   // уведомления и карточка заказа у продавца — вложенные экраны.
   const nested = TABS.indexOf(state.view) === -1
-    || (state.view === 'seller' && !!state.seller.current);
+    || (state.view === 'seller' && !!state.seller.current)
+    || (state.view === 'supplier' && !!state.supplier.current);
   if (nested) tg.BackButton.show();
   else tg.BackButton.hide();
 }
@@ -1376,6 +1435,9 @@ function copyValue(key) {
     // В банк удобнее вставлять голое число, без пробелов и знака рубля.
     const shown = payment.amount || (order && order.priceText) || '';
     text = shown.replace(/[^\d.,]/g, '') || shown;
+  } else if (key === 'udid') {
+    const current = state.supplier.current;
+    text = current && current.udid;
   } else {
     const row = rows.find((r) => r.key === key);
     text = row && row.value;
@@ -1441,6 +1503,11 @@ async function loadSellerOrders() {
   const data = await fetchSellerOrders();
   state.seller.orders = data.orders;
   state.seller.counts = data.counts || {};
+}
+
+async function loadSupplierOrders() {
+  const data = await api('/api/supplier/orders');
+  state.supplier.orders = data.orders;
 }
 
 const SELLER_ACTION_DONE = { installed: 'Инструкция отправлена покупателю' };
@@ -1639,6 +1706,8 @@ const actions = {
   'doc-back': () => { state.view = state.doc.from || 'about'; render(); },
 
   'seller-back': () => { state.seller.current = null; render(); },
+
+  'supplier-back': () => { state.supplier.current = null; render(); },
 };
 
 function handleAction(raw) {
@@ -1648,8 +1717,10 @@ function handleAction(raw) {
   if (kind === 'tab') {
     state.view = value;
     state.seller.current = null;
+    state.supplier.current = null;
     haptic('light');
     if (value === 'seller') guard(async () => { await loadSellerOrders(); render(); });
+    else if (value === 'supplier') guard(async () => { await loadSupplierOrders(); render(); });
     else if (value === 'order') guard(async () => { await refreshOrder(); render(); });
     else render();
     return;
@@ -1672,7 +1743,6 @@ function handleAction(raw) {
     else window.location.href = url;
     return;
   }
-  if (kind === 'pick-app') { haptic('light'); startCheckout(value); return; }
   if (kind === 'notify-mode') {
     guard(async () => {
       const data = await api('/api/notify/order', {
@@ -1693,6 +1763,11 @@ function handleAction(raw) {
   }
   if (kind === 'seller-open') {
     state.seller.current = state.seller.orders.find((o) => String(o.id) === value) || null;
+    render();
+    return;
+  }
+  if (kind === 'supplier-open') {
+    state.supplier.current = state.supplier.orders.find((o) => String(o.id) === value) || null;
     render();
     return;
   }
@@ -1769,6 +1844,7 @@ async function boot() {
       tg.BackButton.onClick(() => {
         if (state.view === 'doc') { handleAction('doc-back'); return; }
         if (state.seller.current) state.seller.current = null;
+        else if (state.supplier.current) state.supplier.current = null;
         else state.view = 'home';
         render();
       });

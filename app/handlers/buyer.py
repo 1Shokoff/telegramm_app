@@ -90,8 +90,7 @@ async def cmd_about(message: Message, cfg: Config) -> None:
 
 async def _notify_screen(user_id: int, cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
     """Экран настроек: общие переключатели плюс режим для текущего заказа."""
-    is_seller = cfg.is_seller(user_id)
-    items = const.notifications_for(is_seller)
+    items = const.notifications_for(cfg.role_of(user_id))
     prefs = await db.get_notify_prefs(user_id)
 
     order = await db.get_active_order(user_id)
@@ -119,7 +118,7 @@ async def cmd_notify(message: Message, cfg: Config) -> None:
 @router.callback_query(F.data.startswith("nt:"))
 async def cb_notify_toggle(call: CallbackQuery, cfg: Config) -> None:
     kind = call.data.split(":", 1)[1]
-    allowed = {key for key, _t, _h in const.notifications_for(cfg.is_seller(call.from_user.id))}
+    allowed = {key for key, _t, _h in const.notifications_for(cfg.role_of(call.from_user.id))}
     if kind not in allowed:
         await call.answer()
         return

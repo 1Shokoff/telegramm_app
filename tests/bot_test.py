@@ -14,11 +14,13 @@ from datetime import datetime, timezone
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
 BUYER = 777
 SELLER = 999
+SUPPLIER = 888
 
 os.environ.update(
     {
         "BOT_TOKEN": TOKEN,
         "SELLER_IDS": str(SELLER),
+        "SUPPLIER_IDS": str(SUPPLIER),
         "WEBAPP_URL": "https://example.com",
         "PAYMENT_MODE": "manual",
         "PAYMENT_DETAILS": "СБП: +7 900 000-00-00",
@@ -117,6 +119,21 @@ class StubBot(Bot):
 
     def reset(self) -> None:
         self.calls.clear()
+
+
+def buttons_to(bot: StubBot, chat_id: int) -> list[tuple[str, str | None, str | None]]:
+    """Кнопки под сообщениями в чат: подпись, callback_data и текст для копирования."""
+    out = []
+    for m in bot.calls:
+        if getattr(m, "chat_id", None) != chat_id:
+            continue
+        markup = getattr(m, "reply_markup", None)
+        if not markup:
+            continue
+        for row in markup.inline_keyboard:
+            for b in row:
+                out.append((b.text, b.callback_data, b.copy_text.text if b.copy_text else None))
+    return out
 
 
 def make_message(chat_id: int, text: str, from_bot: bool = False, photo: list | None = None) -> Message:
@@ -252,6 +269,16 @@ async def main() -> int:
     check("реквизиты показаны", "Оплата заказа" in payment_text)
     check("сумма к оплате в реквизитах", "Сумма к оплате" in payment_text, payment_text[:160])
     check("продавцу пришло уведомление", any("Новый заказ" in t for t in bot.texts_to(SELLER)))
+    check(
+        "поставщику пришло уведомление одной строкой",
+        bot.texts_to(SUPPLIER) == ["Заказ № %s от @user%d" % (order["code"], BUYER)],
+        str(bot.texts_to(SUPPLIER)),
+    )
+    check(
+        "в уведомлении есть кнопка «Открыть заказ»",
+        any(b[1] == "o:ucard:%d" % order["id"] for b in buttons_to(bot, SUPPLIER)),
+        str(buttons_to(bot, SUPPLIER)),
+    )
 
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "o:claim:%d" % order["id"]))
@@ -304,6 +331,43 @@ async def main() -> int:
     check("UDID принят", order["device_udid"] == "2b6f0cc904d137be2e1730235f5664094b831186"
           and order["status"] == const.UDID)
     check("продавец получил UDID", any("Получен UDID" in t for t in bot.texts_to(SELLER)))
+
+    print("\nПоставщик")
+    bot.reset()
+    await dp.feed_update(bot, callback_update(SUPPLIER, "o:ucard:%d" % order["id"]))
+    card = "\n".join(bot.texts_to(SUPPLIER))
+    check("в карточке номер заказа", order["code"] in card, card[:160])
+    check("в карточке покупатель", "@user%d" % BUYER in card)
+    check("в карточке время создания", "Создан:" in card)
+    check("в карточке UDID", order["device_udid"] in card)
+    check("лишнего в карточке нет", "Сумма" not in card and "Заметка" not in card, card[:160])
+    check(
+        "кнопка копирует UDID",
+        any(b[2] == order["device_udid"] for b in buttons_to(bot, SUPPLIER)),
+        str(buttons_to(bot, SUPPLIER)),
+    )
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(SUPPLIER, "/udids"))
+    check("/udids перечисляет заказы с UDID",
+          any("Заказы с UDID" in t for t in bot.texts_to(SUPPLIER)), str(bot.texts_to(SUPPLIER)))
+    check("из списка открывается карточка",
+          any(b[1] == "o:ucard:%d" % order["id"] for b in buttons_to(bot, SUPPLIER)))
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/udids"))
+    check("покупателю список UDID недоступен",
+          not any("Заказы с UDID" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(SUPPLIER, "/orders all"))
+    check("поставщику команды продавца недоступны",
+          any("Не понял сообщение" in t for t in bot.texts_to(SUPPLIER)), str(bot.texts_to(SUPPLIER)))
+
+    bot.reset()
+    before = (await db.get_order(order["id"]))["status"]
+    await dp.feed_update(bot, callback_update(SUPPLIER, "o:scancel:%d" % order["id"]))
+    check("поставщик не отменяет заказ", (await db.get_order(order["id"]))["status"] == before)
 
     print("\nЗавершение заказа")
     bot.reset()

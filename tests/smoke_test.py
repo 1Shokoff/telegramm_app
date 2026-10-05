@@ -22,11 +22,15 @@ from urllib.parse import urlencode
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
 BUYER = 777
 SELLER = 999
+SUPPLIER = 888
+# Отдельный покупатель для проверок поставщика: у основного своя история заказов.
+SUPPLIER_BUYER = 555
 
 os.environ.update(
     {
         "BOT_TOKEN": TOKEN,
         "SELLER_IDS": str(SELLER),
+        "SUPPLIER_IDS": str(SUPPLIER),
         "WEBAPP_URL": "https://example.com",
         "PAYMENT_MODE": "manual",
         "PAYMENT_DETAILS": "Переводите только по СБП",
@@ -607,6 +611,79 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         await client.close()
 
 
+async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
+    print("\nПоставщик")
+    check(
+        "роли разведены",
+        (cfg.role_of(SELLER), cfg.role_of(SUPPLIER), cfg.role_of(BUYER))
+        == (const.ROLE_SELLER, const.ROLE_SUPPLIER, const.ROLE_BUYER),
+    )
+
+    await db.upsert_user(SUPPLIER_BUYER, "petr", "Пётр")
+    bot.sent.clear()
+    order, created = await svc.get_or_create_order(SUPPLIER_BUYER)
+    check("заказ создан", created)
+    check(
+        "поставщику ушло уведомление одной строкой",
+        bot.to(SUPPLIER) == ["Заказ № %s от @petr" % order["code"]],
+        str(bot.to(SUPPLIER)),
+    )
+    check("продавцу ушла полная карточка", any("Новый заказ" in t for t in bot.to(SELLER)))
+
+    await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
+    await svc.submit_udid(order["id"], udid_mod.TEST_UDID, SUPPLIER_BUYER)
+
+    app = build_app(cfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    supplier_headers = {"X-Init-Data": make_init_data(SUPPLIER, "Поставщик")}
+    buyer_headers = {"X-Init-Data": make_init_data(BUYER)}
+
+    try:
+        res = await client.get("/api/supplier/orders", headers=supplier_headers)
+        rows = (await res.json())["orders"]
+        row = next((o for o in rows if o["code"] == order["code"]), None)
+        check("поставщик видит заказ с UDID", row is not None, str(rows)[:200])
+        check(
+            "в заказе только разрешённые поля",
+            set(row) == {"id", "code", "firstName", "username", "createdAt", "udid"},
+            str(sorted(row)),
+        )
+        check("UDID отдаётся целиком", row["udid"] == udid_mod.TEST_UDID)
+        check("покупатель виден", row["username"] == "petr" and row["firstName"] == "Пётр")
+
+        res = await client.get("/api/supplier/orders", headers=buyer_headers)
+        check("покупателю список UDID закрыт", res.status == 403)
+
+        res = await client.get("/api/seller/orders", headers=supplier_headers)
+        check("поставщику панель продавца закрыта", res.status == 403)
+
+        res = await client.post(
+            "/api/seller/action",
+            headers=supplier_headers,
+            json={"action": "payok", "orderId": order["id"]},
+        )
+        check("поставщик не управляет заказами", res.status == 403)
+
+        res = await client.get("/api/bootstrap", headers=supplier_headers)
+        user = (await res.json())["user"]
+        check(
+            "витрина знает поставщика",
+            user["isSupplier"] is True and user["isSeller"] is False,
+            str(user),
+        )
+
+        res = await client.get("/api/notify", headers=supplier_headers)
+        kinds = [k["key"] for k in (await res.json())["kinds"]]
+        check(
+            "поставщику настраиваются только новые заказы",
+            kinds == [const.NOTIFY_NEW_ORDER],
+            str(kinds),
+        )
+    finally:
+        await client.close()
+
+
 def make_ipa(path, min_os: str = "16.0") -> None:
     """Сборка-пустышка: внутри только Info.plist, как в настоящей."""
     info = plistlib.dumps({
@@ -700,6 +777,7 @@ async def main() -> int:
     await test_notify(cfg, bot, svc)
     await test_close_and_reorder(cfg, bot, svc)
     await test_app_orders(cfg, bot, svc)
+    await test_supplier(cfg, bot, svc)
     await test_ipa(cfg, bot, svc)
 
     await db.close()

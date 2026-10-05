@@ -50,6 +50,14 @@ def user_line(order: dict) -> str:
     return "%s%s · <code>%s</code>" % (name, tail, order["user_id"])
 
 
+def user_ref(order: dict) -> str:
+    """Покупатель одной строкой: @юзернейм, иначе имя, иначе Telegram ID."""
+    username = order.get("username")
+    if username:
+        return "@" + e(username)
+    return e(order.get("first_name") or order["user_id"])
+
+
 def steps_block(order: dict) -> str:
     """Четыре шага воронки с отметками — как на экране «Мой заказ»."""
     step = const.STEP.get(order["status"], 0)
@@ -115,6 +123,25 @@ def seller_order_card(order: dict) -> str:
     if order.get("seller_note"):
         lines.append("Заметка: %s" % e(order["seller_note"]))
     lines.append("Создан: %s" % when(order["created_at"]))
+    return "\n".join(lines)
+
+
+def supplier_new_order(order: dict) -> str:
+    """Уведомление поставщику о новом заказе — одной строкой."""
+    return "Заказ № %s от %s" % (e(order["code"]), user_ref(order))
+
+
+def supplier_order_card(order: dict) -> str:
+    """Карточка поставщика: номер, покупатель, время создания и UDID — больше ему незачем."""
+    lines = [
+        "<b>Заказ № %s</b>" % e(order["code"]),
+        "Покупатель: %s" % user_ref(order),
+        "Создан: %s" % when(order["created_at"]),
+    ]
+    if order.get("device_udid"):
+        lines.append("UDID: <code>%s</code>" % e(order["device_udid"]))
+    else:
+        lines.append("UDID: покупатель ещё не присылал")
     return "\n".join(lines)
 
 

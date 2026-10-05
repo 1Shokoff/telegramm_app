@@ -25,7 +25,7 @@ from aiohttp import web
 from . import db
 from .api import build_app
 from .config import Config, load_config
-from .handlers import buyer, payments, seller
+from .handlers import buyer, payments, seller, supplier
 from .service import OrderService
 
 log = logging.getLogger("apps-bot")
@@ -50,6 +50,12 @@ SELLER_COMMANDS = BUYER_COMMANDS + [
 ]
 
 
+SUPPLIER_COMMANDS = BUYER_COMMANDS + [
+    BotCommand(command="udids", description="Заказы с UDID"),
+    BotCommand(command="supplierhelp", description="Команды поставщика"),
+]
+
+
 async def setup_profile(bot: Bot, cfg: Config) -> None:
     await bot.set_my_commands(BUYER_COMMANDS, scope=BotCommandScopeDefault())
     for seller_id in cfg.seller_ids:
@@ -57,6 +63,17 @@ async def setup_profile(bot: Bot, cfg: Config) -> None:
             await bot.set_my_commands(SELLER_COMMANDS, scope=BotCommandScopeChat(chat_id=seller_id))
         except Exception as exc:  # продавец ещё не писал боту
             log.warning("Не задали команды для продавца %s: %s", seller_id, exc)
+
+    for supplier_id in cfg.supplier_ids:
+        # Продавцу список команд уже задан, и он шире списка поставщика.
+        if cfg.is_seller(supplier_id):
+            continue
+        try:
+            await bot.set_my_commands(
+                SUPPLIER_COMMANDS, scope=BotCommandScopeChat(chat_id=supplier_id)
+            )
+        except Exception as exc:  # поставщик ещё не писал боту
+            log.warning("Не задали команды для поставщика %s: %s", supplier_id, exc)
 
     if cfg.webapp_enabled:
         await bot.set_chat_menu_button(
@@ -137,6 +154,7 @@ def build_dispatcher(cfg: Config, service: OrderService) -> Dispatcher:
     dp["cfg"] = cfg
     dp["service"] = service
     dp.include_router(seller.setup(cfg))
+    dp.include_router(supplier.setup(cfg))
     dp.include_router(payments.router)
     dp.include_router(buyer.router)
     return dp

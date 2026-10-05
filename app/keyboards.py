@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram.types import (
+    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     WebAppInfo,
@@ -136,6 +137,29 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def supplier_order_kb(order: dict) -> InlineKeyboardMarkup:
+    """Поставщику нужны только UDID и кнопка скопировать его.
+
+    copy_text кладёт значение в буфер обмена силами самого Telegram —
+    боту для этого ничего отправлять не нужно.
+    """
+    udid = order.get("device_udid")
+    rows: list[list[InlineKeyboardButton]] = []
+    if udid:
+        rows.append(
+            [InlineKeyboardButton(text="📋 Скопировать UDID", copy_text=CopyTextButton(text=udid))]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 Обновить" if udid else "Открыть заказ",
+                callback_data=cb("ucard", order["id"]),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

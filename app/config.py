@@ -70,6 +70,7 @@ def _ids(name: str) -> tuple[int, ...]:
 class Config:
     bot_token: str
     seller_ids: tuple[int, ...]
+    supplier_ids: tuple[int, ...]
     support_username: str
     webapp_url: str
     price_rub: int
@@ -114,6 +115,17 @@ class Config:
 
     def is_seller(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.seller_ids
+
+    def is_supplier(self, tg_id: int | None) -> bool:
+        return tg_id is not None and tg_id in self.supplier_ids
+
+    def role_of(self, tg_id: int | None) -> str:
+        """Роль аккаунта. Продавец сильнее поставщика: его права включают чужие."""
+        if self.is_seller(tg_id):
+            return const.ROLE_SELLER
+        if self.is_supplier(tg_id):
+            return const.ROLE_SUPPLIER
+        return const.ROLE_BUYER
 
     def amount_text(self, price_rub: int) -> str:
         """Сумма к переводу: значение из .env важнее цены заказа."""
@@ -191,6 +203,9 @@ def load_config() -> Config:
     if not sellers:
         raise SystemExit("SELLER_IDS не задан: без него некому подтверждать заказы")
 
+    # Поставщиков может не быть вовсе — роль необязательная.
+    suppliers = _ids("SUPPLIER_IDS")
+
     mode = _s("PAYMENT_MODE", "manual").lower()
     if mode not in PAYMENT_MODES:
         raise SystemExit(f"PAYMENT_MODE={mode!r}: допустимо {', '.join(PAYMENT_MODES)}")
@@ -209,6 +224,7 @@ def load_config() -> Config:
     return Config(
         bot_token=token,
         seller_ids=sellers,
+        supplier_ids=suppliers,
         support_username=_s("SUPPORT_USERNAME").lstrip("@"),
         webapp_url=_s("WEBAPP_URL").rstrip("/"),
         price_rub=_i("PRICE_RUB", 3000),
