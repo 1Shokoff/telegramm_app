@@ -337,6 +337,7 @@ async def main() -> int:
     await dp.feed_update(bot, callback_update(SUPPLIER, "o:ucard:%d" % order["id"]))
     card = "\n".join(bot.texts_to(SUPPLIER))
     check("в карточке номер заказа", order["code"] in card, card[:160])
+    check("в карточке статус исполнения", const.TITLES[const.UDID] in card, card[:160])
     check("в карточке покупатель", "@user%d" % BUYER in card)
     check("в карточке время создания", "Создан:" in card)
     check("в карточке UDID", order["device_udid"] in card)

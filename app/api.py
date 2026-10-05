@@ -200,6 +200,8 @@ def supplier_order_public(order: dict) -> dict:
     return {
         "id": order["id"],
         "code": order["code"],
+        "status": order["status"],
+        "statusTitle": const.TITLES.get(order["status"], order["status"]),
         "firstName": order.get("first_name"),
         "username": order.get("username"),
         "createdAt": order["created_at"],

@@ -135,6 +135,7 @@ def supplier_order_card(order: dict) -> str:
     """Карточка поставщика: номер, покупатель, время создания и UDID — больше ему незачем."""
     lines = [
         "<b>Заказ № %s</b>" % e(order["code"]),
+        "Статус: <b>%s</b>" % e(const.TITLES.get(order["status"], order["status"])),
         "Покупатель: %s" % user_ref(order),
         "Создан: %s" % when(order["created_at"]),
     ]

@@ -646,9 +646,13 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("поставщик видит заказ с UDID", row is not None, str(rows)[:200])
         check(
             "в заказе только разрешённые поля",
-            set(row) == {"id", "code", "firstName", "username", "createdAt", "udid"},
+            set(row) == {
+                "id", "code", "status", "statusTitle",
+                "firstName", "username", "createdAt", "udid",
+            },
             str(sorted(row)),
         )
+        check("статус заказа виден", row["statusTitle"] == const.TITLES[const.UDID], row["statusTitle"])
         check("UDID отдаётся целиком", row["udid"] == udid_mod.TEST_UDID)
         check("покупатель виден", row["username"] == "petr" and row["firstName"] == "Пётр")
 
@@ -682,6 +686,19 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
     finally:
         await client.close()
+
+    # Владелец держит обе роли на одном аккаунте — он должен получать и то, и другое.
+    both = OrderService(bot, replace(cfg, supplier_ids=(SELLER,)))
+    await db.upsert_user(557, "ivan", "Иван")
+    bot.sent.clear()
+    order2, _ = await both.get_or_create_order(557)
+    to_seller = bot.to(SELLER)
+    check(
+        "продавец-поставщик получает и карточку, и строку поставщика",
+        any("Новый заказ" in t for t in to_seller)
+        and ("Заказ № %s от @ivan" % order2["code"]) in to_seller,
+        str(to_seller),
+    )
 
 
 def make_ipa(path, min_os: str = "16.0") -> None:

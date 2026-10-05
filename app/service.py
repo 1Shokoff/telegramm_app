@@ -74,11 +74,13 @@ class OrderService:
         kind: str | None = None,
         order_id: int | None = None,
     ) -> None:
-        """Продавцу, который заодно и поставщик, второе сообщение не нужно:
-        полную карточку он уже получил."""
+        """Пишем каждому из SUPPLIER_IDS.
+
+        Продавец, записанный и в поставщики, получает оба сообщения: свою
+        карточку и строку поставщика. Иначе владелец, у которого один аккаунт
+        на обе роли, не видел бы уведомлений поставщика вообще.
+        """
         for supplier_id in self.cfg.supplier_ids:
-            if self.cfg.is_seller(supplier_id):
-                continue
             await self.send(supplier_id, text, kb, kind=kind, order_id=order_id)
 
     async def push_order_to_suppliers(self, order: dict, kind: str) -> None:

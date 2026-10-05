@@ -1022,8 +1022,9 @@ async function refreshSellerList() {
 function supplierLine(o) {
   return (
     '<button class="order-line" data-action="supplier-open:' + o.id + '">' +
+      '<span class="status-dot ' + esc(o.status) + '"></span>' +
       '<span class="grow"><span class="code">' + esc(o.code) + '</span><br>' +
-      '<span class="meta">' + esc(dateOf(o.createdAt)) +
+      '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(dateOf(o.createdAt)) +
       (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
       '<span class="meta">›</span>' +
     '</button>'
@@ -1033,10 +1034,13 @@ function supplierLine(o) {
 function viewSupplierOrder(o) {
   return (
     '<button class="backlink" data-action="supplier-back">← Все заказы</button>' +
-    '<div class="section-head"><h2>' + esc(o.code) + '</h2></div>' +
+    '<div class="section-head"><h2>' + esc(o.code) + '</h2>' +
+      '<span class="badge">' + esc(o.statusTitle) + '</span></div>' +
     '<div class="card">' +
       '<div class="row"><span class="label">Номер заказа</span><span class="value">' +
         esc(o.code) + '</span></div>' +
+      '<div class="row"><span class="label">Статус</span><span class="value">' +
+        esc(o.statusTitle) + '</span></div>' +
       '<div class="row"><span class="label">Покупатель</span><span class="value">' +
         esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
       '<div class="row"><span class="label">Создан</span><span class="value">' +
