@@ -95,9 +95,10 @@ function appBySlug(slug) {
 function iconHtml(app, extraClass) {
   if (!app) return '';
   const cls = 'app-icon' + (app.dark ? ' dark' : '') + (extraClass ? ' ' + extraClass : '');
-  // Файл иконки называет сервер: буква остаётся запасным вариантом.
-  const img = app.icon
-    ? '<img src="/static/icons/' + esc(app.icon) + '" alt="" loading="lazy" onerror="this.remove()">'
+  // Адрес иконки даёт сервер (своя картинка или вынутая из сборки),
+  // буква остаётся запасным вариантом.
+  const img = app.iconUrl
+    ? '<img src="' + esc(app.iconUrl) + '" alt="" loading="lazy" onerror="this.remove()">'
     : '';
   // span, а не div: иконка живёт и внутри кнопки-карточки.
   return (

@@ -22,6 +22,8 @@ class OrderService:
     def __init__(self, bot: Bot, cfg: Config) -> None:
         self.bot = bot
         self.cfg = cfg
+        # Каталог собирается из сборок в папке — сервису он нужен для заказов и текстов.
+        catalog.use_folder(cfg.ipa_dir)
 
     # ------------------------------------------------------------ отправка
 

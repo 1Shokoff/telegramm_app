@@ -51,10 +51,15 @@ os.environ.update(
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests import fixtures  # noqa: E402
+
+# Витрина собирается из сборок в папке — тестам нужна своя папка с каталогом.
+os.environ["IPA_DIR"] = str(fixtures.catalog_folder())
+
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, catalog, const, db, ipa as ipa_mod, udid as udid_mod  # noqa: E402
+from app import auth, bundle, catalog, const, db, ipa as ipa_mod, udid as udid_mod  # noqa: E402
 from app.api import build_app  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, ServiceError  # noqa: E402
@@ -339,13 +344,15 @@ async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
     whole, _ = await svc.get_or_create_order(BUYER, None)
     check("можно вернуться ко всему каталогу", whole["app_slug"] is None)
 
-    sber = catalog.get_app("sber")
-    sber["price"] = 990
+    toml = cfg.ipa_dir / "catalog.toml"
+    original = toml.read_text(encoding="utf-8")
+    # Заголовок раздела — с начала строки: в шапке файла [sber] встречается в комментарии.
+    toml.write_text(original.replace("\n[sber]\n", "\n[sber]\nprice = 990\n", 1), encoding="utf-8")
     try:
         priced, _ = await svc.get_or_create_order(BUYER, "sber")
-        check("своя цена приложения применяется", priced["price_rub"] == 990)
+        check("своя цена из catalog.toml применяется", priced["price_rub"] == 990)
     finally:
-        sber.pop("price", None)
+        toml.write_text(original, encoding="utf-8")
 
     try:
         await svc.get_or_create_order(BUYER, "нет-такого")
@@ -701,33 +708,27 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
     )
 
 
-def make_ipa(path, min_os: str = "16.0") -> None:
-    """Сборка-пустышка: внутри только Info.plist, как в настоящей."""
-    info = plistlib.dumps({
-        "CFBundleIdentifier": "ru.test.app",
-        "CFBundleShortVersionString": "1.0.0",
-        "MinimumOSVersion": min_os,
-    })
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("Payload/Test.app/Info.plist", info)
-        zf.writestr("Payload/Test.app/Test", b"x" * 2048)
+def bump(path: pathlib.Path, seconds: int) -> None:
+    """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
+    moment = time.time() + seconds
+    os.utime(path, (moment, moment))
 
 
 async def test_ipa(cfg, bot: FakeBot, svc: OrderService) -> None:
-    print("\nСборки .ipa")
+    print("\nВитрина из сборок")
     folder = pathlib.Path(tempfile.mkdtemp())
-    make_ipa(folder / "sber-17.6.1.ipa")
-    make_ipa(folder / "unknown-1.0.ipa")
+    fixtures.make_ipa(folder / "sber-17.6.1.ipa", name="Sber", ru_name="Сбербанк", icon=True)
+    fixtures.make_ipa(folder / "newapp-2.1.ipa", name="New App")
+    fixtures.make_ipa(folder / "Bad Name 1.0.ipa")
     (folder / "readme.txt").write_text("не сборка", encoding="utf-8")
 
     found = ipa_mod.entries(folder)
-    check("сборка нашлась по слагу каталога", list(found) == ["sber"], str(list(found)))
+    check("сборки найдены, кривое имя пропущено", sorted(found) == ["newapp", "sber"], str(sorted(found)))
     check("версия берётся из имени файла", found["sber"]["version"] == "17.6.1")
     check("минимальная iOS читается из сборки", found["sber"]["minOs"] == "16.0")
     check("размер человеку", ipa_mod.size_text(262_400_000) == "250,2 МБ",
           ipa_mod.size_text(262_400_000))
     check("имя файла для браузера", ipa_mod.download_name(found["sber"]) == "sber-17.6.1.ipa")
-
     slug, version = ipa_mod._slug_and_version("ozon-bank-19.27.0")
     check("слаг с дефисом разобран", (slug, version) == ("ozon-bank", "19.27.0"))
     slug, version = ipa_mod._slug_and_version("sber")
@@ -737,34 +738,112 @@ async def test_ipa(cfg, bot: FakeBot, svc: OrderService) -> None:
     app = build_app(with_files, bot, svc)
     client = TestClient(TestServer(app))
     await client.start_server()
-    try:
+
+    async def showcase() -> dict:
         res = await client.get("/api/public")
-        data = await res.json()
-        sber = next(a for a in data["catalog"] if a["slug"] == "sber")
-        other = next(a for a in data["catalog"] if a["slug"] == "spotify")
-        check("витрина знает про сборку", sber["build"]["version"] == "17.6.1")
-        check("у приложения без файла сборки нет", "build" not in other)
+        return await res.json()
+
+    try:
+        data = await showcase()
+        items = {a["slug"]: a for a in data["catalog"]}
+        check("товары появились из сборок сами", sorted(items) == ["newapp", "sber"], str(sorted(items)))
+        check("русское название из локализации сборки", items["sber"]["name"] == "Сбербанк",
+              items["sber"]["name"])
+        check("без локализации — название из Info.plist", items["newapp"]["name"] == "New App")
+        check("без уточнений категория «Другое»", items["sber"]["category"] == "Другое")
+        check("фильтры — только те, где есть товары", data["categories"] == ["Другое"], data["categories"])
+        check("версия сборки в витрине", items["sber"]["build"]["version"] == "17.6.1")
+        check("иконка из сборки", items["sber"]["iconUrl"].startswith("/icons/sber?v="))
+        check("без иконки — буква", items["newapp"]["iconUrl"] == "" and items["newapp"]["letter"] == "N")
+
+        res = await client.get(items["sber"]["iconUrl"])
+        body = await res.read()
+        check("иконка отдаётся обычным PNG, который откроет браузер",
+              res.status == 200 and res.content_type == "image/png"
+              and body[:8] == bundle.PNG_MAGIC and b"CgBI" not in body, str(res.status))
+        res = await client.get("/icons/newapp")
+        check("нет иконки — 404", res.status == 404)
+
+        own_png = bundle.from_apple_png(fixtures.apple_png(rgba=(10, 20, 200, 255)))
+        (folder / "newapp.png").write_bytes(own_png)
+        (folder / "catalog.toml").write_text("""
+featured = ["newapp"]
+categories = ["Банки"]
+
+[sber]
+name = "СберБанк"
+category = "Банки"
+desc = "Счета и карты."
+version = "17.7"
+min_ios = "15.0"
+
+["newapp-2.1.ipa"]
+name = "Новое"
+icon = "newapp.png"
+nmae = "опечатка"
+""", encoding="utf-8")
+
+        data = await showcase()
+        items = {a["slug"]: a for a in data["catalog"]}
+        check("название из catalog.toml", items["sber"]["name"] == "СберБанк")
+        check("категория из catalog.toml", items["sber"]["category"] == "Банки")
+        check("описание из catalog.toml", items["sber"]["desc"] == "Счета и карты.")
+        check("версию можно поправить", items["sber"]["build"]["version"] == "17.7")
+        check("минимальную iOS можно поправить", items["sber"]["build"]["minOs"] == "15.0")
+        check("раздел по имени файла", items["newapp"]["name"] == "Новое", items["newapp"]["name"])
+        check("опечатка в поле не ломает витрину", len(items) == 2)
+        check("порядок фильтров из catalog.toml", data["categories"] == ["Банки", "Другое"], data["categories"])
+        check("плитки в шапке из catalog.toml", data["featured"] == ["newapp"], data["featured"])
+
+        res = await client.get(items["newapp"]["iconUrl"])
+        check("своя картинка вместо иконки", res.status == 200 and await res.read() == own_png)
 
         res = await client.get("/ipa/sber")
         body = await res.read()
         check("файл отдаётся", res.status == 200 and len(body) > 2000, str(res.status))
-        check("браузер сохранит файл",
-              res.headers["Content-Disposition"] == 'attachment; filename="sber-17.6.1.ipa"',
+        check("браузер сохранит файл с поправленной версией",
+              res.headers["Content-Disposition"] == 'attachment; filename="sber-17.7.ipa"',
               res.headers.get("Content-Disposition", ""))
         check("тип — архив", res.headers["Content-Type"] == "application/octet-stream")
 
-        res = await client.get("/ipa/spotify")
+        newer = folder / "newapp-2.2.ipa"
+        fixtures.make_ipa(newer, name="New App")
+        bump(newer, 60)
+        data = await showcase()
+        items = {a["slug"]: a for a in data["catalog"]}
+        check("новая версия вытесняет старую", items["newapp"]["build"]["version"] == "2.2")
+        check("раздел файла не действует на другую версию", items["newapp"]["name"] == "New App")
+
+        with open(folder / "catalog.toml", "a", encoding="utf-8") as fh:
+            fh.write("\n[newapp]\nhidden = true\n")
+        data = await showcase()
+        check("hidden убирает товар из витрины", [a["slug"] for a in data["catalog"]] == ["sber"])
+        res = await client.get("/ipa/newapp")
+        check("скрытый товар не скачать", res.status == 404)
+
+        (folder / "catalog.toml").write_text("[sber\nname = ", encoding="utf-8")
+        res = await client.get("/api/public")
+        data = await res.json()
+        items = {a["slug"]: a for a in data["catalog"]}
+        check("ошибка в catalog.toml не роняет витрину — работает прошлая версия",
+              res.status == 200 and items.get("sber", {}).get("name") == "СберБанк")
+
+        links = catalog.download_links(with_files)
+        check("ссылка для чата бота", links.get("sber") == "https://example.com/ipa/sber", str(links))
+        check("в каталоге бота название стало ссылкой",
+              '<a href="https://example.com/ipa/sber">СберБанк</a>' in catalog.as_text(links))
+
+        (folder / "sber-17.6.1.ipa").unlink()
+        data = await showcase()
+        check("убрали сборку — товар пропал", "sber" not in [a["slug"] for a in data["catalog"]])
+        check("заказ на убранное приложение помнит название", catalog.product_name("sber") == "СберБанк")
+        res = await client.get("/ipa/sber")
         check("без файла — 404", res.status == 404)
         res = await client.get("/ipa/..%2F..%2Fetc%2Fpasswd")
         check("чужой путь не скачать", res.status == 404, str(res.status))
     finally:
         await client.close()
-
-    links = ipa_mod.links(with_files)
-    check("ссылка для чата бота", links["sber"] == "https://example.com/ipa/sber",
-          links.get("sber", ""))
-    check("в каталоге бота название стало ссылкой",
-          '<a href="https://example.com/ipa/sber">СберБанк</a>' in catalog.as_text(links))
+        catalog.use_folder(cfg.ipa_dir)
 
 
 async def main() -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -47,16 +48,11 @@ RECEIPT_TYPES = PHOTO_TYPES + ("application/pdf",)
 
 
 def catalog_public(cfg: Config) -> list[dict]:
-    """Каталог для витрины: к приложению добавляем цену и сборку, если она есть."""
-    builds = ipa_mod.entries(cfg.ipa_dir)
-    items = []
-    for item in catalog.public_catalog(cfg.price_rub):
-        row = dict(item, priceText=texts.money(item["price"]))
-        build = builds.get(item["slug"])
-        if build:
-            row["build"] = ipa_mod.public(build)
-        items.append(row)
-    return items
+    """Каталог для витрины: товары из сборок в папке и цена для показа."""
+    return [
+        dict(item, priceText=texts.money(item["price"]))
+        for item in catalog.public_catalog(cfg.price_rub)
+    ]
 
 
 def requisites_public(cfg: Config) -> list[dict]:
@@ -271,8 +267,8 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "amount": cfg.pay_amount,
             },
             "catalog": catalog_public(cfg),
-            "categories": list(catalog.CATEGORIES),
-            "featured": list(catalog.FEATURED),
+            "categories": catalog.categories(),
+            "featured": catalog.featured(),
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
             "about": about_block(cfg),
@@ -321,8 +317,8 @@ async def public_bootstrap(request: web.Request) -> web.Response:
                 "stars": cfg.price_stars, "requisites": [],
             },
             "catalog": catalog_public(cfg),
-            "categories": list(catalog.CATEGORIES),
-            "featured": list(catalog.FEATURED),
+            "categories": catalog.categories(),
+            "featured": catalog.featured(),
             "steps": list(const.STEP_NAMES),
             "support": cfg.support_username,
             "about": about_block(cfg),
@@ -678,12 +674,13 @@ async def index(request: web.Request) -> web.Response:
 async def download_ipa(request: web.Request) -> web.StreamResponse:
     """Сборка приложения файлом. Ссылка открытая — её дают и в канале.
 
-    Слаг сверяется с каталогом, поэтому произвольный путь сюда не подставить.
+    Слаг сверяется с каталогом, поэтому произвольный путь сюда не подставить,
+    а скрытый в catalog.toml товар не скачать.
     """
-    cfg = cfg_of(request)
-    entry = ipa_mod.find(cfg.ipa_dir, request.match_info["slug"])
-    if not entry:
+    app = catalog.get_app(request.match_info["slug"])
+    if not app:
         raise web.HTTPNotFound(text="Сборка не найдена")
+    entry = app["build"]
 
     log.info("скачивание %s (%s)", entry["file"], ipa_mod.size_text(entry["size"]))
     return web.FileResponse(
@@ -694,6 +691,24 @@ async def download_ipa(request: web.Request) -> web.StreamResponse:
             "Content-Disposition": 'attachment; filename="%s"' % ipa_mod.download_name(entry),
             "Cache-Control": "public, max-age=3600",
         },
+    )
+
+
+@routes.get("/icons/{slug}")
+async def app_icon(request: web.Request) -> web.Response:
+    """Иконка товара: своя картинка из catalog.toml, иначе вынутая из сборки.
+
+    Адрес в витрине помечен ?v= по времени файла, поэтому кэш можно держать долго:
+    новая сборка или картинка — новый адрес.
+    """
+    found = await asyncio.to_thread(catalog.icon_bytes, request.match_info["slug"])
+    if not found:
+        raise web.HTTPNotFound(text="Иконки нет")
+    body, content_type = found
+    return web.Response(
+        body=body,
+        content_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800"},
     )
 
 
@@ -730,6 +745,7 @@ async def error_middleware(request: web.Request, handler):
 
 
 def build_app(cfg: Config, bot, service: OrderService) -> web.Application:
+    catalog.use_folder(cfg.ipa_dir)
     app = web.Application(middlewares=[error_middleware])
     app["cfg"] = cfg
     app["bot"] = bot

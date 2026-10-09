@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
-from .. import catalog, const, db, ipa as ipa_mod, keyboards, texts, udid as udid_mod
+from .. import catalog, const, db, keyboards, texts, udid as udid_mod
 from ..config import ROOT, Config
 from ..service import OrderService, ServiceError
 
@@ -186,7 +186,7 @@ async def cmd_forget(message: Message) -> None:
 
 @router.callback_query(F.data == "nav:catalog")
 async def nav_catalog(call: CallbackQuery, cfg: Config) -> None:
-    links = ipa_mod.links(cfg)
+    links = catalog.download_links(cfg)
     hint = "\nНажмите на название, чтобы скачать .ipa." if links else ""
     await call.message.answer(
         "<b>Каталог · %d приложений</b>%s\n\n%s"

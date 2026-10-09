@@ -1,6 +1,7 @@
 """Генерирует набор иконок каталога: python tools/make_icons.py
 
-Рисует по файлу на каждое приложение из app/catalog.py — плитка фирменного
+Рисует по файлу на каждое приложение каталога (сборки в IPA_DIR, по умолчанию
+files/) — плитка фирменного
 цвета со знаком категории. Это собственная графика, а не логотипы брендов:
 если есть права на настоящие логотипы, просто положите свои файлы
 webapp/icons/<slug>.png — они перекроют сгенерированные.
@@ -9,10 +10,12 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import catalog  # noqa: E402
+from app.config import ROOT  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp", "icons")
 SIZE = 128
@@ -51,7 +54,9 @@ GLYPHS = {
 
 def icon_svg(app: dict) -> str:
     ink = "#0b0b0c" if app.get("dark") else "#ffffff"
-    glyph = GLYPHS[app["category"]].format(ink=ink)
+    # Категория без своего знака (например, «Другое») получает кружок.
+    fallback = '<circle cx="64" cy="64" r="20" fill="none" stroke="{ink}" stroke-width="6"/>'
+    glyph = GLYPHS.get(app["category"], fallback).format(ink=ink)
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">'
         '<rect width="%d" height="%d" rx="28" fill="%s"/>'
@@ -63,7 +68,8 @@ def icon_svg(app: dict) -> str:
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
     written = 0
-    for app in catalog.APPS:
+    catalog.use_folder(Path(os.environ.get("IPA_DIR") or ROOT / "files"))
+    for app in catalog.apps():
         path = os.path.join(OUT, "%s.svg" % app["slug"])
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(icon_svg(app))

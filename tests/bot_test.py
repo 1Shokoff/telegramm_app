@@ -34,6 +34,11 @@ os.environ.update(
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests import fixtures  # noqa: E402
+
+# Витрина собирается из сборок в папке — тестам нужна своя папка с каталогом.
+os.environ["IPA_DIR"] = str(fixtures.catalog_folder())
+
 from aiogram import Bot  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
 from aiogram.enums import ParseMode  # noqa: E402
