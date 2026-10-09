@@ -62,7 +62,7 @@ from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 from app import auth, bundle, catalog, const, db, ipa as ipa_mod, udid as udid_mod  # noqa: E402
 from app.api import build_app  # noqa: E402
 from app.config import load_config  # noqa: E402
-from app.service import OrderService, ServiceError  # noqa: E402
+from app.service import OrderService, Receipt, ServiceError  # noqa: E402
 
 SPACED_UDID = "2b6f0cc904d137be2e17 30235f5664094b831186"
 
@@ -164,14 +164,54 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     except ServiceError:
         check("UDID до оплаты не принимается", True)
 
-    order = await svc.claim_payment(order["id"], BUYER)
-    check("статус: оплата на проверке", order["status"] == const.PAYMENT_CHECK)
+    try:
+        await svc.submit_receipt(order["id"], BUYER, Receipt(title="без файла"))
+        check("без чека оплату не заявить", False)
+    except ServiceError:
+        check("без чека оплату не заявить", True)
+    check("без чека заказ ждёт оплату", (await db.get_order(order["id"]))["status"] == const.NEW)
+
+    bot.sent.clear()
+    bot.files.clear()
+    order, claimed = await svc.submit_receipt(
+        order["id"], BUYER, Receipt(title="перевод.jpg", file="photo-id", is_photo=True)
+    )
+    check("чек заявляет оплату: статус «на проверке»", claimed and order["status"] == const.PAYMENT_CHECK)
+    check("продавцу ушёл чек вместе с заявкой",
+          any(cid == SELLER and kind == "photo" and "оплатил и приложил чек" in cap
+              for cid, kind, cap in bot.files), str(bot.files))
 
     try:
-        await svc.claim_payment(order["id"], SELLER)
+        await svc.submit_receipt(order["id"], SELLER, Receipt(title="x", url="https://bank.ru/r/1"))
         check("чужой заказ не тронуть", False)
     except ServiceError:
         check("чужой заказ не тронуть", True)
+
+    bot.files.clear()
+    order, again = await svc.submit_receipt(order["id"], BUYER, Receipt(title="чек.pdf", file="doc-id"))
+    check("ещё один чек к заказу на проверке просто пересылается",
+          not again and order["status"] == const.PAYMENT_CHECK
+          and any(cid == SELLER and kind == "document" and "ещё один чек" in cap
+                  for cid, kind, cap in bot.files))
+
+    order = await svc.reject_payment(order["id"], "seller:%d" % SELLER)
+    check("продавец отклонил — заказ снова ждёт чек", order["status"] == const.NEW)
+    try:
+        await svc.submit_receipt(order["id"], BUYER, Receipt(title="x", url="ftp://bank.ru/r/1"))
+        check("ссылка не на сайт отклонена", False)
+    except ServiceError:
+        check("ссылка не на сайт отклонена", True)
+    bot.sent.clear()
+    order, claimed = await svc.submit_receipt(
+        order["id"], BUYER, Receipt(title="https://bank.ru/r/1?a=1&b=2", url="https://bank.ru/r/1?a=1&b=2")
+    )
+    check("после отказа нужен новый чек — ссылкой тоже можно",
+          claimed and order["status"] == const.PAYMENT_CHECK)
+    check("продавцу ушла ссылка на чек, экранированная для Telegram",
+          any(cid == SELLER and 'href="https://bank.ru/r/1?a=1&amp;b=2"' in t for cid, t in bot.sent),
+          str([t for cid, t in bot.sent if cid == SELLER])[:300])
+    events = [e["type"] for e in await db.list_events(order["id"])]
+    check("чеки записаны в журнал заказа", events.count("receipt") == 3, str(events))
 
     order = await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
     check("статус: оплачен", order["status"] == const.PAID)
@@ -360,7 +400,7 @@ async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
     except ServiceError:
         check("неизвестное приложение отклонено", True)
 
-    await svc.claim_payment(order["id"], BUYER)
+    await svc.submit_receipt(order["id"], BUYER, Receipt(title="чек.jpg", file="photo-id", is_photo=True))
     kept, _ = await svc.get_or_create_order(BUYER, "yota")
     check("заказ с заявленной оплатой не перенастраивается",
           kept["app_slug"] == "sber" and kept["status"] == const.PAYMENT_CHECK)
@@ -429,7 +469,20 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         check("UDID до оплаты — 400", res.status == 400)
 
-        # Чек об оплате: файл уходит продавцу и отмечается в переписке заказа.
+        # «Я оплатил» без чека заказ не двигает — ни старой ручкой, ни новой без ссылки.
+        res = await client.post("/api/order/claim", headers=buyer_headers, json={"orderId": order["id"]})
+        answer = await res.json()
+        check("«Я оплатил» без чека — отказ с объяснением",
+              res.status == 400 and "чек" in answer.get("error", ""), str(answer))
+        res = await client.post(
+            "/api/order/receipt/link", headers=buyer_headers,
+            json={"orderId": order["id"], "url": "оплатил, честно"},
+        )
+        check("текст без ссылки — 400", res.status == 400)
+        check("без чека заказ так и ждёт оплату",
+              (await db.get_order(order["id"]))["status"] == const.NEW)
+
+        # Чек об оплате: файл уходит продавцу, заявляет оплату и отмечается в переписке.
         png = bytes.fromhex(
             "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
             "890000000a49444154789c6360000002000100ff03d20000000049454e44ae426082"
@@ -439,7 +492,10 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         res = await client.post(
             "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
         )
-        check("чек принят витриной", res.status == 200, await res.text())
+        answer = await res.json()
+        check("чек принят витриной и заявил оплату",
+              res.status == 200 and answer["claimed"] and answer["order"]["status"] == const.PAYMENT_CHECK,
+              str(answer))
         messages = await db.list_messages(order["id"])
         check("чек отмечен в переписке заказа",
               any("Чек об оплате" in m["text"] for m in messages))
@@ -451,8 +507,17 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         )
         check("чужой тип файла отклонён", res.status == 400)
 
-        res = await client.post("/api/order/claim", headers=buyer_headers, json={"orderId": order["id"]})
-        check("оплата заявлена", (await res.json())["order"]["status"] == const.PAYMENT_CHECK)
+        res = await client.post(
+            "/api/order/receipt/link", headers=buyer_headers,
+            json={"orderId": order["id"], "url": "Вот ещё чек: https://bank.ru/r/2."},
+        )
+        answer = await res.json()
+        check("ссылка на чек из текста принята вдогонку",
+              res.status == 200 and not answer["claimed"]
+              and answer["order"]["status"] == const.PAYMENT_CHECK, str(answer))
+        messages = await db.list_messages(order["id"])
+        check("ссылка без хвостовой точки в переписке заказа",
+              any(m["text"] == "🔗 Ссылка на чек: https://bank.ru/r/2" for m in messages))
 
         res = await client.post(
             "/api/seller/action",

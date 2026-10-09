@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Mess
 
 from .. import catalog, const, db, keyboards, texts, udid as udid_mod
 from ..config import ROOT, Config
-from ..service import OrderService, ServiceError
+from ..service import OrderService, Receipt, ServiceError, find_link
 
 log = logging.getLogger(__name__)
 router = Router(name="buyer")
@@ -321,21 +321,23 @@ async def nav_order(call: CallbackQuery, cfg: Config) -> None:
 
 
 @router.callback_query(F.data.startswith("o:claim:"))
-async def cb_claim(call: CallbackQuery, cfg: Config, service: OrderService) -> None:
+async def cb_claim(call: CallbackQuery) -> None:
+    """«Я оплатил» сам заказ не двигает: на проверку его отправляет только чек."""
     parsed = keyboards.parse_cb(call.data)
     if not parsed:
         return
-    try:
-        order = await service.claim_payment(parsed[1], call.from_user.id)
-    except ServiceError as exc:
-        await call.answer(str(exc), show_alert=True)
+    order = await db.get_order(parsed[1])
+    if not order or order["user_id"] != call.from_user.id:
+        await call.answer("Это не ваш заказ", show_alert=True)
         return
-    await call.message.answer(
-        "Спасибо! Заказ <b>%s</b> отправлен на проверку оплаты.\n"
-        "Как только продавец подтвердит платёж, попросим UDID." % texts.e(order["code"]),
-        reply_markup=keyboards.buyer_order_kb(cfg, order),
-    )
-    await call.answer("Отправлено продавцу")
+    if order["status"] == const.PAYMENT_CHECK:
+        await call.answer("Чек уже у продавца — ждём проверки оплаты.", show_alert=True)
+        return
+    if order["status"] != const.NEW:
+        await call.answer("Оплата по этому заказу уже подтверждена.", show_alert=True)
+        return
+    await call.message.answer(texts.RECEIPT_PROMPT)
+    await call.answer("Нужен чек об оплате")
 
 
 @router.callback_query(F.data.startswith("o:demopay:"))
@@ -412,39 +414,38 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
 # ------------------------------------------------------------------ чек об оплате
 
 
-async def _receipt(message: Message, cfg: Config, service: OrderService, file, is_photo: bool, title: str) -> None:
+async def _receipt(message: Message, cfg: Config, service: OrderService, receipt: Receipt) -> None:
     await _remember(message)
     order = await db.get_active_order(message.from_user.id)
     if not order or order["status"] not in const.OPEN_STATUSES:
         await message.answer("Открытого заказа нет. Оформите заказ — и присылайте чек сюда.")
         return
     try:
-        await service.attach_receipt(
-            order["id"], message.from_user.id, file, is_photo=is_photo, title=title
-        )
+        updated, claimed = await service.submit_receipt(order["id"], message.from_user.id, receipt)
     except ServiceError as exc:
         await message.answer(texts.e(str(exc)))
         return
-    await message.answer(
-        "Чек по заказу <b>%s</b> отправлен продавцу." % texts.e(order["code"]),
-        reply_markup=keyboards.buyer_order_kb(cfg, order),
-    )
+    if claimed:
+        reply = (
+            "Чек получен — заказ <b>%s</b> отправлен на проверку оплаты.\n"
+            "Как только продавец подтвердит платёж, попросим UDID." % texts.e(updated["code"])
+        )
+    else:
+        reply = "Чек по заказу <b>%s</b> отправлен продавцу." % texts.e(updated["code"])
+    await message.answer(reply, reply_markup=keyboards.buyer_order_kb(cfg, updated))
 
 
 @router.message(F.photo)
 async def receipt_photo(message: Message, cfg: Config, service: OrderService) -> None:
     photo = message.photo[-1]
-    await _receipt(
-        message, cfg, service, photo.file_id, True, message.caption or "скриншот перевода"
-    )
+    title = message.caption or "скриншот перевода"
+    await _receipt(message, cfg, service, Receipt(title=title, file=photo.file_id, is_photo=True))
 
 
 @router.message(F.document)
 async def receipt_document(message: Message, cfg: Config, service: OrderService) -> None:
-    await _receipt(
-        message, cfg, service, message.document.file_id, False,
-        message.document.file_name or message.caption or "файл",
-    )
+    title = message.document.file_name or message.caption or "файл"
+    await _receipt(message, cfg, service, Receipt(title=title, file=message.document.file_id))
 
 
 # ------------------------------------------------------------------- UDID текстом
@@ -468,6 +469,13 @@ async def free_text(message: Message, cfg: Config, service: OrderService) -> Non
         )
         return
 
+    # Неоплаченный заказ ждёт чек: ссылка в сообщении — это и есть чек.
+    awaiting_receipt = bool(order) and order["status"] == const.NEW and order["payment_mode"] == "manual"
+    link = find_link(text) if awaiting_receipt else ""
+    if link:
+        await _receipt(message, cfg, service, Receipt(title=link, url=link))
+        return
+
     if order:
         try:
             await service.post_message(order["id"], text, message.from_user.id, from_seller=False)
@@ -477,6 +485,8 @@ async def free_text(message: Message, cfg: Config, service: OrderService) -> Non
         reply = "Отправлено продавцу по заказу <b>%s</b>. Ответ придёт сюда." % texts.e(order["code"])
         if order["status"] == const.PAID:
             reply += "\n\nЕсли это был UDID — проверьте номер: нужно 40 символов."
+        if awaiting_receipt:
+            reply += "\n\nЧтобы заказ ушёл на проверку оплаты, пришлите чек — скриншот, PDF или ссылку."
         await message.answer(reply, reply_markup=keyboards.buyer_order_kb(cfg, order))
         return
 

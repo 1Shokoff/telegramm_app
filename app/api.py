@@ -20,7 +20,7 @@ from . import (
     udid as udid_mod,
 )
 from .config import Config
-from .service import OrderService, ServiceError
+from .service import OrderService, Receipt, ServiceError, find_link
 
 log = logging.getLogger(__name__)
 routes = web.RouteTableDef()
@@ -360,10 +360,12 @@ async def create_order(request: web.Request) -> web.Response:
 
 @routes.post("/api/order/claim")
 async def claim(request: web.Request) -> web.Response:
-    user = await current_user(request)
-    data = await body(request)
-    order = await service_of(request).claim_payment(order_id_of(data), user.id)
-    return web.json_response({"order": order_public(order)})
+    """«Я оплатил» без чека больше не заявляет оплату: её заявляет сам чек.
+
+    Ручка осталась ради витрины, открытой до выкатки, — она получит понятный ответ.
+    """
+    await current_user(request)
+    raise ApiError(texts.RECEIPT_REQUIRED)
 
 
 @routes.post("/api/order/receipt")
@@ -399,10 +401,24 @@ async def upload_receipt(request: web.Request) -> web.Response:
 
     name = field.filename or ("чек.pdf" if content_type == "application/pdf" else "чек.jpg")
     file = BufferedInputFile(bytes(data), filename=name)
-    await service_of(request).attach_receipt(
-        order_id, user.id, file, is_photo=content_type in PHOTO_TYPES, title=name
+    order, claimed = await service_of(request).submit_receipt(
+        order_id, user.id, Receipt(title=name, file=file, is_photo=content_type in PHOTO_TYPES)
     )
-    return web.json_response({"ok": True, "name": name})
+    return web.json_response({"ok": True, "name": name, "claimed": claimed, "order": order_public(order)})
+
+
+@routes.post("/api/order/receipt/link")
+async def receipt_link(request: web.Request) -> web.Response:
+    """Чек ссылкой — для банков, которые отдают чек страницей, а не файлом."""
+    user = await current_user(request)
+    data = await body(request)
+    url = find_link(str(data.get("url") or ""))
+    if not url:
+        raise ApiError("Не вижу ссылки — она должна начинаться с https://")
+    order, claimed = await service_of(request).submit_receipt(
+        order_id_of(data), user.id, Receipt(title=url, url=url)
+    )
+    return web.json_response({"ok": True, "claimed": claimed, "order": order_public(order)})
 
 
 @routes.post("/api/order/demopay")

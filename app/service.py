@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
@@ -14,6 +16,27 @@ log = logging.getLogger(__name__)
 
 class ServiceError(Exception):
     """Ошибка бизнес-правила: текст можно показывать пользователю."""
+
+
+# Ссылка на чек: банки отдают чек страницей, покупатели присылают её в чат.
+LINK_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+LINK_LIMIT = 2000
+
+
+def find_link(text: str | None) -> str:
+    """Первая ссылка в сообщении без хвостовой пунктуации; пусто — ссылки нет."""
+    match = LINK_RE.search(text or "")
+    return match.group(0).rstrip(".,;:!?»)") if match else ""
+
+
+@dataclass
+class Receipt:
+    """Подтверждение оплаты: фото, файл или ссылка на чек."""
+
+    title: str               # имя файла или сама ссылка — для продавца и журнала
+    file: object = None      # file_id из бота или BufferedInputFile из витрины
+    is_photo: bool = False
+    url: str = ""
 
 
 class OrderService:
@@ -166,24 +189,80 @@ class OrderService:
             raise ServiceError("Заказ не найден.")
         return order
 
-    async def claim_payment(self, order_id: int, actor_id: int) -> dict:
-        """Покупатель нажал «Я оплатил» (режим manual)."""
+    async def submit_receipt(self, order_id: int, actor_id: int, receipt: Receipt) -> tuple[dict, bool]:
+        """Чек об оплате от покупателя: фото, файл или ссылка.
+
+        Для неоплаченного заказа в режиме manual чек и есть заявка об оплате:
+        без чека заказ на проверку не уходит. Продавцу приходит одно сообщение —
+        чек, карточка заказа и кнопки «Оплата получена» / «Отклонить». Ещё один
+        чек к заказу, который уже на проверке, просто пересылается продавцу.
+
+        Файл у себя не храним: из бота пересылаем по file_id, из витрины —
+        отдаём Telegram байтами. Хранилище чеков — переписка продавца.
+
+        Возвращает заказ и признак, что оплата заявлена именно этим чеком.
+        """
         order = await self._load(order_id)
         if order["user_id"] != actor_id:
             raise ServiceError("Это не ваш заказ.")
-        if order["status"] == const.PAYMENT_CHECK:
-            raise ServiceError("Оплата уже на проверке — ждём продавца.")
-        if order["status"] != const.NEW:
-            raise ServiceError("Оплата по этому заказу уже подтверждена.")
+        if order["status"] not in const.OPEN_STATUSES:
+            raise ServiceError("Заказ закрыт — чек уже не нужен.")
+        if receipt.url:
+            if len(receipt.url) > LINK_LIMIT or not LINK_RE.fullmatch(receipt.url):
+                raise ServiceError("Ссылка на чек должна начинаться с https:// или http://.")
+        elif receipt.file is None:
+            raise ServiceError(texts.RECEIPT_REQUIRED)
 
-        updated = await db.set_status(
-            order_id, const.PAYMENT_CHECK, "user:%d" % actor_id, "покупатель заявил оплату"
-        )
-        assert updated
-        await self.push_order_to_sellers(
-            updated, "💳 <b>Покупатель заявил оплату</b>", const.NOTIFY_PAYMENT
-        )
-        return updated
+        actor = "user:%d" % actor_id
+        claimed = order["status"] == const.NEW and order["payment_mode"] == "manual"
+        if claimed:
+            updated = await db.set_status(order_id, const.PAYMENT_CHECK, actor, "покупатель приложил чек")
+            assert updated
+            order = updated
+
+        full = await self._with_user(order)
+        if claimed:
+            header = "💳 <b>Покупатель оплатил и приложил чек</b>"
+            kind = const.NOTIFY_PAYMENT
+        else:
+            header = "🧾 <b>Покупатель прислал ещё один чек</b>"
+            kind = const.NOTIFY_CHAT
+        kb = keyboards.seller_order_kb(order)
+        sent = 0
+        for seller_id in self.cfg.seller_ids:
+            if not await self.allowed(seller_id, kind, order_id):
+                continue
+            if await self._send_receipt(seller_id, full, header, receipt, kb):
+                sent += 1
+
+        note = "🔗 Ссылка на чек: %s" % receipt.url if receipt.url else "🧾 Чек об оплате: %s" % receipt.title
+        await db.add_message(order_id, db.BUYER, actor_id, note)
+        await db.add_event(order_id, actor, "receipt", receipt.url or receipt.title)
+        if not sent:
+            log.warning("Чек по заказу %s никому не доставлен", order["code"])
+        return order, claimed
+
+    async def _send_receipt(
+        self, seller_id: int, order: dict, header: str, receipt: Receipt, kb: InlineKeyboardMarkup
+    ) -> bool:
+        """Файл уходит с короткой подписью — у Telegram на неё лимит 1024 знака;
+        ссылка — обычным сообщением с полной карточкой заказа."""
+        try:
+            if receipt.url:
+                text = texts.receipt_link_message(order, header, receipt.url)
+                await self.bot.send_message(seller_id, text, reply_markup=kb)
+            elif receipt.is_photo:
+                caption = texts.receipt_caption(order, header, receipt.title)
+                await self.bot.send_photo(seller_id, receipt.file, caption=caption, reply_markup=kb)
+            else:
+                caption = texts.receipt_caption(order, header, receipt.title)
+                await self.bot.send_document(seller_id, receipt.file, caption=caption, reply_markup=kb)
+            return True
+        except TelegramForbiddenError:
+            await db.set_blocked(seller_id, True)
+        except TelegramBadRequest as exc:
+            log.warning("Не отправили чек продавцу %s: %s", seller_id, exc)
+        return False
 
     async def confirm_payment(self, order_id: int, actor: str, ref: str | None = None) -> dict:
         order = await self._load(order_id)
@@ -294,44 +373,6 @@ class OrderService:
     # ------------------------------------------------------------ переписка
 
     MESSAGE_LIMIT = 2000
-
-    async def attach_receipt(
-        self, order_id: int, actor_id: int, file, *, is_photo: bool, title: str
-    ) -> dict:
-        """Чек об оплате от покупателя: уходит продавцу и отмечается в заказе.
-
-        Файл не храним у себя: из бота пересылаем по file_id, из Mini App —
-        отдаём Telegram байтами. Хранилище чеков — переписка продавца.
-        """
-        order = await self._load(order_id)
-        if order["user_id"] != actor_id:
-            raise ServiceError("Это не ваш заказ.")
-        if order["status"] not in const.OPEN_STATUSES:
-            raise ServiceError("Заказ закрыт — чек уже не нужен.")
-
-        full = await self._with_user(order)
-        caption = texts.receipt_from_buyer(full, title)
-        kb = keyboards.seller_order_kb(order)
-        sent = 0
-        for seller_id in self.cfg.seller_ids:
-            if not await self.allowed(seller_id, const.NOTIFY_CHAT, order_id):
-                continue
-            try:
-                if is_photo:
-                    await self.bot.send_photo(seller_id, file, caption=caption, reply_markup=kb)
-                else:
-                    await self.bot.send_document(seller_id, file, caption=caption, reply_markup=kb)
-                sent += 1
-            except TelegramForbiddenError:
-                await db.set_blocked(seller_id, True)
-            except TelegramBadRequest as exc:
-                log.warning("Не отправили чек продавцу %s: %s", seller_id, exc)
-
-        await db.add_message(order_id, db.BUYER, actor_id, "🧾 Чек об оплате: %s" % title)
-        await db.add_event(order_id, "user:%d" % actor_id, "receipt", title)
-        if not sent:
-            log.warning("Чек по заказу %s никому не доставлен", order["code"])
-        return order
 
     async def post_message(
         self, order_id: int, text: str, author_id: int, from_seller: bool

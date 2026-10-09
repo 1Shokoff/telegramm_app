@@ -67,7 +67,8 @@ def payment_kb(order_id: int, mode: str) -> InlineKeyboardMarkup:
     elif mode == "stars":
         pay = [InlineKeyboardButton(text="Оплатить в Stars", callback_data=cb("stars", order_id))]
     else:
-        pay = [InlineKeyboardButton(text="Я оплатил", callback_data=cb("claim", order_id))]
+        # Сам по себе «Я оплатил» заказ не двигает — кнопка просит чек.
+        pay = [InlineKeyboardButton(text="📎 Я оплатил — прислать чек", callback_data=cb("claim", order_id))]
     return _rows(pay, [InlineKeyboardButton(text="Отменить заказ", callback_data=cb("cancel", order_id))])
 
 

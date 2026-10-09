@@ -280,12 +280,33 @@ function requisiteRow(row) {
   );
 }
 
+/* Ещё один чек к заказу, который уже на проверке: например, PDF вдогонку к скриншоту. */
 function receiptBlock() {
   return (
     '<input type="file" id="receiptFile" accept="image/*,application/pdf" hidden>' +
-    '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить чек</button>' +
+    '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить ещё чек</button>' +
     '<div class="cta-note">Скриншот перевода или чек из банка — продавец увидит его ' +
       'в заказе. Ссылку на документ можно прислать сообщением в чат.</div>'
+  );
+}
+
+/* Без чека оплата не заявляется: заказ уходит на проверку в тот момент,
+   когда покупатель прикладывает скриншот, PDF или ссылку на чек. Так продавцу
+   не приходится искать платежи, которых не было. */
+function proofBlock() {
+  return (
+    '<div class="proof">' +
+      '<div class="proof-title">Подтвердите оплату</div>' +
+      '<div class="proof-note">После перевода прикрепите чек — скриншот, PDF или ссылку. ' +
+        'Без чека заказ не уйдёт на проверку.</div>' +
+      '<input type="file" id="receiptFile" accept="image/*,application/pdf" hidden>' +
+      '<button class="btn btn-primary" data-action="receipt-pick">📎 Я оплатил — прикрепить чек</button>' +
+      '<div class="proof-link">' +
+        '<input class="search" id="receiptLink" type="url" inputmode="url" autocomplete="off" ' +
+          'enterkeyhint="send" placeholder="или ссылка на чек" aria-label="Ссылка на чек">' +
+        '<button class="btn btn-secondary btn-sm" data-action="receipt-link">Отправить</button>' +
+      '</div>' +
+    '</div>'
   );
 }
 
@@ -299,8 +320,7 @@ function viewPayment(order) {
   } else if (mode === 'stars') {
     action = '<button class="btn btn-primary" data-action="pay-stars">Оплатить ' + (b.payment.stars || '') + ' ⭐</button>';
   } else {
-    action = '<button class="btn btn-primary" data-action="pay-claim">Я оплатил</button>' +
-      '<div class="cta-note">Продавец проверит поступление и подтвердит</div>';
+    action = proofBlock();
   }
 
   return (
@@ -309,9 +329,6 @@ function viewPayment(order) {
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' + esc(order.priceText) + '</p>' +
     '<div class="card">' +
       (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
-      // Сначала чек, потом «Я оплатил»: так покупатель прикладывает
-      // подтверждение до того, как заявит оплату.
-      (mode === 'manual' ? receiptBlock() : '') +
       action +
     '</div>' +
     '<button class="btn btn-danger btn-sm" data-action="order-cancel">Отменить заказ</button>'
@@ -1358,6 +1375,16 @@ function bindInputs() {
     });
   }
 
+  const receiptLink = document.getElementById('receiptLink');
+  if (receiptLink) {
+    receiptLink.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendReceiptLink();
+      }
+    });
+  }
+
   const agreeUdid = document.getElementById('agreeUdid');
   if (agreeUdid) {
     agreeUdid.addEventListener('change', () => {
@@ -1477,7 +1504,30 @@ function uploadReceipt(file) {
     let data = {};
     try { data = await res.json(); } catch (e) { /* пустой ответ */ }
     if (!res.ok) throw new Error(data.error || 'Не удалось отправить файл');
-    toast('Чек отправлен продавцу');
+    if (data.order) state.boot.order = data.order;
+    toast(data.claimed ? 'Чек получен — заказ на проверке' : 'Чек отправлен продавцу');
+    render();
+  });
+}
+
+function sendReceiptLink() {
+  const order = state.boot.order;
+  const input = document.getElementById('receiptLink');
+  const url = (input && input.value || '').trim();
+  if (!order) return;
+  // Ссылку из текста вытащит сервер, здесь лишь ловим явную ошибку.
+  if (!/https?:\/\/\S+/i.test(url)) {
+    toast('Вставьте ссылку на чек — она начинается с https://', true);
+    if (input) input.focus();
+    return;
+  }
+  guard(async () => {
+    const data = await api('/api/order/receipt/link', {
+      method: 'POST', body: { orderId: order.id, url },
+    });
+    state.boot.order = data.order;
+    toast(data.claimed ? 'Чек получен — заказ на проверке' : 'Ссылка отправлена продавцу');
+    render();
   });
 }
 
@@ -1553,12 +1603,7 @@ const actions = {
     if (input) input.click();
   },
 
-  'pay-claim': () => guard(async () => {
-    const data = await api('/api/order/claim', { method: 'POST', body: { orderId: state.boot.order.id } });
-    state.boot.order = data.order;
-    toast('Отправлено продавцу');
-    render();
-  }),
+  'receipt-link': () => sendReceiptLink(),
 
   'pay-demo': () => guard(async () => {
     const data = await api('/api/order/demopay', { method: 'POST', body: { orderId: state.boot.order.id } });

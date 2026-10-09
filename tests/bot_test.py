@@ -285,34 +285,64 @@ async def main() -> int:
         str(buttons_to(bot, SUPPLIER)),
     )
 
+    print("\nОплата только с чеком")
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "o:claim:%d" % order["id"]))
     order = await db.get_order(order["id"])
-    check("«Я оплатил» меняет статус", order["status"] == const.PAYMENT_CHECK)
-    check("продавец видит заявку", any("заявил оплату" in t for t in bot.texts_to(SELLER)))
+    check("«Я оплатил» без чека заказ не двигает", order["status"] == const.NEW)
+    check("бот просит прислать чек", any("Пришлите чек об оплате" in t for t in bot.texts_to(BUYER)))
+    check("продавца без чека не беспокоим", not bot.texts_to(SELLER))
 
-    print("\nПродавец")
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "Я перевёл деньги"))
+    order = await db.get_order(order["id"])
+    check("текст без чека заказ не двигает", order["status"] == const.NEW)
+    check("бот напоминает про чек", any("пришлите чек" in t for t in bot.texts_to(BUYER)),
+          str(bot.texts_to(BUYER)))
+
     bot.reset()
     await dp.feed_update(bot, file_update(BUYER, photo=True))
+    order = await db.get_order(order["id"])
+    check("чек картинкой отправил заказ на проверку", order["status"] == const.PAYMENT_CHECK)
     check(
-        "чек картинкой ушёл продавцу",
+        "продавцу ушёл чек с кнопками проверки оплаты",
         any(
-            isinstance(m, SendPhoto) and m.chat_id == SELLER and "Чек по заказу" in (m.caption or "")
+            isinstance(m, SendPhoto) and m.chat_id == SELLER
+            and "оплатил и приложил чек" in (m.caption or "")
+            and any(b.callback_data == "o:payok:%d" % order["id"]
+                    for row in m.reply_markup.inline_keyboard for b in row)
             for m in bot.calls
         ),
     )
-    check("покупателю подтвердили чек", any("отправлен продавцу" in t for t in bot.texts_to(BUYER)))
+    check("покупателю сказали, что заказ на проверке",
+          any("отправлен на проверку оплаты" in t for t in bot.texts_to(BUYER)))
 
     bot.reset()
     await dp.feed_update(bot, file_update(BUYER, photo=False, name="chek.pdf"))
     check(
-        "чек файлом ушёл продавцу",
+        "ещё один чек файлом ушёл продавцу",
         any(
-            isinstance(m, SendDocument) and m.chat_id == SELLER and "chek.pdf" in (m.caption or "")
+            isinstance(m, SendDocument) and m.chat_id == SELLER
+            and "chek.pdf" in (m.caption or "") and "ещё один чек" in (m.caption or "")
             for m in bot.calls
         ),
     )
+    check("покупателю подтвердили второй чек", any("отправлен продавцу" in t for t in bot.texts_to(BUYER)))
 
+    bot.reset()
+    await dp.feed_update(bot, callback_update(SELLER, "o:payno:%d" % order["id"]))
+    order = await db.get_order(order["id"])
+    check("продавец отклонил — заказ снова ждёт чек", order["status"] == const.NEW)
+
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "Вот чек: https://bank.ru/receipt/42."))
+    order = await db.get_order(order["id"])
+    check("ссылка на чек тоже отправляет заказ на проверку", order["status"] == const.PAYMENT_CHECK)
+    check("продавцу ушла ссылка на чек",
+          any('href="https://bank.ru/receipt/42"' in t for t in bot.texts_to(SELLER)),
+          str(bot.texts_to(SELLER))[:300])
+
+    print("\nПродавец")
     bot.reset()
     await dp.feed_update(bot, callback_update(BUYER, "o:payok:%d" % order["id"]))
     order = await db.get_order(order["id"])

@@ -194,15 +194,25 @@ def payment_instructions(order: dict, cfg: Config) -> str:
 
     lines.append("")
     lines.append(
-        "Укажите в комментарии к платежу номер заказа <code>%s</code>, "
-        "затем нажмите «Я оплатил» — продавец подтвердит поступление." % e(order["code"])
-    )
-    lines.append("")
-    lines.append(
-        "Чек или скриншот перевода можно прислать сюда картинкой или файлом — "
-        "продавец увидит его в заказе."
+        "Укажите в комментарии к платежу номер заказа <code>%s</code>. "
+        "После перевода пришлите сюда <b>чек</b> — скриншот, PDF или ссылку на чек: "
+        "без него заказ не уйдёт на проверку." % e(order["code"])
     )
     return "\n".join(lines)
+
+
+# Без чека оплата не заявляется: так продавцу не приходится искать платежи,
+# которых не было.
+RECEIPT_REQUIRED = (
+    "Прикрепите чек об оплате — скриншот, PDF или ссылку. "
+    "Без него заказ не уйдёт на проверку."
+)
+
+RECEIPT_PROMPT = (
+    "<b>Пришлите чек об оплате</b>\n\n"
+    "Скриншот перевода, PDF из банка или ссылку на чек — прямо сюда, в чат. "
+    "Как только чек придёт, заказ уйдёт продавцу на проверку."
+)
 
 
 def instruction_message(order: dict, webapp_enabled: bool) -> str:
@@ -247,9 +257,24 @@ def instruction_message(order: dict, webapp_enabled: bool) -> str:
     return "\n".join(lines).strip()
 
 
-def receipt_from_buyer(order: dict, title: str) -> str:
-    return "🧾 <b>Чек по заказу %s</b>\n%s\n\n%s" % (
-        e(order["code"]), user_line(order), e(title)
+def receipt_caption(order: dict, header: str, title: str) -> str:
+    """Подпись к чеку-файлу для продавца. Telegram режет подписи на 1024 знаках,
+    поэтому только короткие поля — без заметок продавца."""
+    return "%s\n\n<b>Заказ %s</b> · %s\nПокупатель: %s\nСумма: %s\nЧек: %s" % (
+        header,
+        e(order["code"]),
+        e(const.TITLES.get(order["status"], "—")),
+        user_line(order),
+        money(order["price_rub"]),
+        e(title[:200]),
+    )
+
+
+def receipt_link_message(order: dict, header: str, url: str) -> str:
+    """Чек-ссылка для продавца: карточка заказа и ссылка, которую можно открыть."""
+    shown = url if len(url) <= 80 else url[:77] + "…"
+    return '%s\n\n%s\nЧек: <a href="%s">%s</a>' % (
+        header, seller_order_card(order), escape(url, quote=True), e(shown)
     )
 
 

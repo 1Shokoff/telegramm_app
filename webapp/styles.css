@@ -469,6 +469,14 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 }
 .req-copy:active { transform: scale(.92); color: var(--accent); border-color: #c8ff3166; }
 
+/* Подтверждение оплаты: без чека заказ на проверку не уходит. */
+.proof { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.proof-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.proof-note { color: var(--muted); font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
+.proof-link { display: flex; gap: 8px; margin-top: 10px; }
+.proof-link .search { margin-bottom: 0; flex: 1; min-width: 0; }
+.proof-link .btn { width: auto; flex: 0 0 auto; }
+
 /* ---------------------------------------------------------- инструкция */
 
 /* Цвета взяты с присланных слайдов, поэтому заданы явно, а не переменными
