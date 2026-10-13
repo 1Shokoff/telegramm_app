@@ -242,20 +242,47 @@ async def list_user_orders(user_id: int, limit: int = 20) -> list[dict]:
     )
 
 
-async def list_orders(
-    status: str | None = None, query: str | None = None, limit: int = 50, offset: int = 0
-) -> list[dict]:
-    sql = (
-        "SELECT o.*, u.username, u.first_name "
-        "FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id WHERE 1 = 1"
-    )
+# Сортировки списка продавца: ключ из витрины → ORDER BY.
+_UNREAD = "(SELECT COUNT(*) FROM messages m WHERE m.order_id = o.id AND m.seen_seller = 0)"
+_BUYER = "COALESCE(u.username, u.first_name)"
+ORDER_SORTS = {
+    "created_desc": "o.id DESC",
+    "created_asc": "o.id ASC",
+    # updated_at двигают смена статуса, чек, UDID и каждое сообщение.
+    "activity": "o.updated_at DESC, o.id DESC",
+    "unread": "%s DESC, o.id DESC" % _UNREAD,
+    # Безымянные — в конце; латиница без учёта регистра.
+    "buyer": "%s IS NULL, %s COLLATE NOCASE, o.id DESC" % (_BUYER, _BUYER),
+}
+
+
+def _order_filters(
+    status: str | None,
+    query: str | None,
+    statuses: list[str] | None,
+    created_from: str | None,
+    created_to: str | None,
+    unread_only: bool,
+    has_udid: bool | None,
+) -> tuple[str, list[Any]]:
+    """WHERE для списка заказов. Даты — в формате базы (UTC ISO), как пишет now()."""
+    sql = " WHERE 1 = 1"
     args: list[Any] = []
+
     if status == "open":
-        sql += " AND o.status IN (%s)" % ",".join("?" * len(const.OPEN_STATUSES))
-        args += list(const.OPEN_STATUSES)
+        allowed = list(const.OPEN_STATUSES)
     elif status:
-        sql += " AND o.status = ?"
-        args.append(status)
+        allowed = [status]
+    else:
+        allowed = None  # все статусы
+    if statuses:
+        allowed = [s for s in (allowed or list(const.TITLES)) if s in statuses]
+    if allowed is not None:
+        if not allowed:
+            return " WHERE 1 = 0", []
+        sql += " AND o.status IN (%s)" % ",".join("?" * len(allowed))
+        args += allowed
+
     if query:
         like = "%" + query.strip() + "%"
         sql += (
@@ -263,9 +290,61 @@ async def list_orders(
             " OR CAST(o.user_id AS TEXT) LIKE ?)"
         )
         args += [like, like, like, like]
-    sql += " ORDER BY o.id DESC LIMIT ? OFFSET ?"
-    args += [limit, offset]
-    return await _fetchall(sql, args)
+    if created_from:
+        sql += " AND o.created_at >= ?"
+        args.append(created_from)
+    if created_to:
+        sql += " AND o.created_at < ?"
+        args.append(created_to)
+    if unread_only:
+        sql += " AND EXISTS (SELECT 1 FROM messages m WHERE m.order_id = o.id AND m.seen_seller = 0)"
+    if has_udid is True:
+        sql += " AND o.device_udid IS NOT NULL AND o.device_udid <> ''"
+    elif has_udid is False:
+        sql += " AND (o.device_udid IS NULL OR o.device_udid = '')"
+    return sql, args
+
+
+async def list_orders(
+    status: str | None = None,
+    query: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    *,
+    sort: str = "created_desc",
+    statuses: list[str] | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    unread_only: bool = False,
+    has_udid: bool | None = None,
+) -> list[dict]:
+    where, args = _order_filters(status, query, statuses, created_from, created_to, unread_only, has_udid)
+    sql = (
+        "SELECT o.*, u.username, u.first_name "
+        "FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id"
+        + where
+        + " ORDER BY " + ORDER_SORTS.get(sort, ORDER_SORTS["created_desc"])
+        + " LIMIT ? OFFSET ?"
+    )
+    return await _fetchall(sql, args + [limit, offset])
+
+
+async def count_orders(
+    status: str | None = None,
+    query: str | None = None,
+    *,
+    statuses: list[str] | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    unread_only: bool = False,
+    has_udid: bool | None = None,
+) -> int:
+    """Сколько заказов подходит под фильтры — чтобы не прятать молча тех, кто не влез в список."""
+    where, args = _order_filters(status, query, statuses, created_from, created_to, unread_only, has_udid)
+    row = await _fetchone(
+        "SELECT COUNT(*) AS n FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id" + where, args
+    )
+    return int(row["n"]) if row else 0
 
 
 async def list_orders_with_udid(limit: int = 50) -> list[dict]:

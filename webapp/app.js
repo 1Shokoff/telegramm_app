@@ -19,7 +19,11 @@ const state = {
   agreeTerms: false,
   agreeUdid: false,
   busy: false,
-  seller: { status: 'open', q: '', orders: [], counts: {}, current: null },
+  // prefs — сортировка и фильтры каждой подгруппы, читаются из памяти устройства при первом обращении.
+  seller: {
+    status: 'open', q: '', orders: [], counts: {}, current: null,
+    total: 0, titles: {}, prefs: null, panel: false,
+  },
   supplier: { orders: [], current: null },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
   notify: { kinds: [], order: null, modes: [], from: 'help' },
@@ -283,10 +287,12 @@ function requisiteRow(row) {
 /* Ещё один чек к заказу, который уже на проверке: например, PDF вдогонку к скриншоту. */
 function receiptBlock() {
   return (
-    '<input type="file" id="receiptFile" hidden>' +
+    '<input type="file" id="receiptFile" multiple hidden>' +
     '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить ещё чек</button>' +
+    '<div class="upload-bar" id="uploadBar" hidden><span></span></div>' +
     '<div class="cta-note">Скриншот перевода или чек из банка — продавец увидит его ' +
-      'в заказе. Ссылку на документ можно прислать сообщением в чат.</div>'
+      'в заказе. Можно выбрать несколько файлов, вместе до 15 МБ. Ссылку на документ ' +
+      'можно прислать сообщением в чат.</div>'
   );
 }
 
@@ -297,10 +303,11 @@ function proofBlock() {
   return (
     '<div class="proof">' +
       '<div class="proof-title">Подтвердите оплату</div>' +
-      '<div class="proof-note">После перевода прикрепите чек — скриншот, PDF, любой другой ' +
-        'файл до 15 МБ или ссылку. Без чека заказ не уйдёт на проверку.</div>' +
-      '<input type="file" id="receiptFile" hidden>' +
+      '<div class="proof-note">После перевода прикрепите чек — скриншот, PDF или другие файлы ' +
+        '(можно несколько, вместе до 15 МБ) либо ссылку. Без чека заказ не уйдёт на проверку.</div>' +
+      '<input type="file" id="receiptFile" multiple hidden>' +
       '<button class="btn btn-primary" data-action="receipt-pick">📎 Я оплатил — прикрепить чек</button>' +
+      '<div class="upload-bar" id="uploadBar" hidden><span></span></div>' +
       '<div class="proof-link">' +
         '<input class="search" id="receiptLink" type="url" inputmode="url" autocomplete="off" ' +
           'enterkeyhint="send" placeholder="или ссылка на чек" aria-label="Ссылка на чек">' +
@@ -417,9 +424,7 @@ function viewUdid(order) {
       '2. Нажмите Get My UDID и разрешите загрузку профиля\n' +
       '3. Зайдите в Настройки → Профиль загружен → Установить. ' +
       'Если попросит, введите код-пароль iPhone\n' +
-      '4. После установки откроется страница с вашим UDID — скопируйте его\n\n' +
-      'UDID состоит из цифр и латинских букв A–F. У новых iPhone он короче и с дефисом: ' +
-      '00008150-000914312E78C01C.</div>' +
+      '4. После установки откроется страница с вашим UDID — скопируйте его</div>' +
       '<button class="btn btn-secondary btn-sm mt" data-action="open-udid-site">' +
         'Открыть udid.tech</button>' +
       '<img class="guide" src="/static/img/udid-guide.webp" loading="lazy" ' +
@@ -1024,14 +1029,26 @@ function viewSeller() {
       return '<div class="chip' + (s.status === key ? ' active' : '') + '" data-action="seller-filter:' + key + '">' +
         esc(label) + esc(n) + '</div>';
     }).join('') + '</div>' +
+    '<div id="sellerTools">' + sellerToolbar() + '</div>' +
     '<div id="sellerList">' + sellerListHtml() + '</div>'
   );
 }
 
 function sellerListHtml() {
   const s = state.seller;
-  if (s.orders.length) return s.orders.map(sellerLine).join('');
-  return '<div class="notice">' + (s.q.trim() ? 'Ничего не нашли.' : 'Заказов в этом фильтре нет.') + '</div>';
+  if (!s.orders.length) {
+    if (s.q.trim()) return '<div class="notice">Ничего не нашли.</div>';
+    return activeSellerFilters(sellerPrefs(s.status), s.status)
+      ? '<div class="notice">Под эти фильтры заказов нет. ' +
+          '<button class="linkish" data-action="seller-reset">Сбросить фильтры</button></div>'
+      : '<div class="notice">Заказов в этом фильтре нет.</div>';
+  }
+  // Список ограничен сервером — не прячем молча тех, кто не влез.
+  const more = s.total > s.orders.length
+    ? '<div class="cta-note">Показаны ' + s.orders.length + ' из ' + s.total +
+      ' — уточните фильтры, чтобы увидеть остальные.</div>'
+    : '';
+  return s.orders.map(sellerLine).join('') + more;
 }
 
 let sellerSearchSeq = 0;
@@ -1048,10 +1065,193 @@ async function refreshSellerList() {
   }
   // Ответ на устаревший запрос не должен перезаписать свежий результат.
   if (seq !== sellerSearchSeq) return;
-  state.seller.orders = data.orders;
-  state.seller.counts = data.counts || {};
+  applySellerData(data);
   const list = document.getElementById('sellerList');
   if (list) list.innerHTML = sellerListHtml();
+  // Поиск выключает фильтры подгрупп — панель под полем должна это показать.
+  const tools = document.getElementById('sellerTools');
+  if (tools) tools.innerHTML = sellerToolbar();
+}
+
+/* -------------------------------------------- продавец: сортировка и фильтры */
+
+// У каждой подгруппы («Открытые», «Готовые», «Все»…) свои сортировка и фильтры:
+// переход в другую подгруппу их не переносит. Хранятся на этом устройстве.
+const SELLER_PREFS_KEY = 'iapki.seller.prefs.v1';
+
+const SELLER_SORTS = [
+  ['created_desc', 'Новые сверху'],
+  ['created_asc', 'Старые сверху'],
+  ['activity', 'Последняя активность'],
+  ['unread', 'Непрочитанные сверху'],
+  ['buyer', 'Покупатель А→Я'],
+];
+
+const SELLER_PERIODS = [
+  ['', 'Всё время'], ['today', 'Сегодня'], ['7d', '7 дней'], ['30d', '30 дней'], ['custom', 'Свои даты'],
+];
+
+// Фильтры по статусу и UDID нужны там, где в подгруппе несколько статусов.
+const SELLER_GROUP_STATUSES = {
+  open: ['new', 'payment_check', 'paid', 'udid', 'installed'],
+  all: ['new', 'payment_check', 'paid', 'udid', 'installed', 'done', 'cancelled'],
+};
+
+function defaultSellerPrefs() {
+  return { sort: 'created_desc', statuses: [], period: '', from: '', to: '', unread: false, udid: '' };
+}
+
+function sellerPrefs(group) {
+  const s = state.seller;
+  if (!s.prefs) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SELLER_PREFS_KEY) || '{}');
+      s.prefs = saved && typeof saved === 'object' ? saved : {};
+    } catch (e) {
+      s.prefs = {};
+    }
+  }
+  // Недостающие поля добираем значениями по умолчанию — на случай старого сохранения.
+  s.prefs[group] = Object.assign(defaultSellerPrefs(), s.prefs[group] || {});
+  return s.prefs[group];
+}
+
+function saveSellerPrefs() {
+  try {
+    localStorage.setItem(SELLER_PREFS_KEY, JSON.stringify(state.seller.prefs || {}));
+  } catch (e) { /* хранилище недоступно — настройки живут до закрытия */ }
+}
+
+function activeSellerFilters(prefs, group) {
+  let n = 0;
+  if (SELLER_GROUP_STATUSES[group] && prefs.statuses.length) n += 1;
+  // «Свои даты» без дат ничего не отбирают — фильтром не считаем.
+  if (prefs.period && (prefs.period !== 'custom' || prefs.from || prefs.to)) n += 1;
+  if (prefs.unread) n += 1;
+  if (SELLER_GROUP_STATUSES[group] && prefs.udid) n += 1;
+  return n;
+}
+
+/* Границы периода — в часовом поясе телефона продавца: «сегодня» начинается
+   в его полночь. На сервер уходят моменты в UTC. */
+function sellerPeriod(prefs) {
+  const day = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const back = (days) => { const d = day(new Date()); d.setDate(d.getDate() - days); return d; };
+  if (prefs.period === 'today') return { from: back(0) };
+  if (prefs.period === '7d') return { from: back(6) };
+  if (prefs.period === '30d') return { from: back(29) };
+  if (prefs.period === 'custom') {
+    const range = {};
+    if (prefs.from) range.from = new Date(prefs.from + 'T00:00:00');
+    if (prefs.to) {
+      const to = new Date(prefs.to + 'T00:00:00');
+      to.setDate(to.getDate() + 1);  // «по 13-е» включает весь день 13-го
+      range.to = to;
+    }
+    return range;
+  }
+  return {};
+}
+
+function sellerParams(params, group) {
+  const prefs = sellerPrefs(group);
+  if (prefs.sort !== 'created_desc') params.set('sort', prefs.sort);
+  if (SELLER_GROUP_STATUSES[group]) {
+    if (prefs.statuses.length) params.set('st', prefs.statuses.join(','));
+    if (prefs.udid) params.set('udid', prefs.udid);
+  }
+  const range = sellerPeriod(prefs);
+  if (range.from && !isNaN(range.from)) params.set('from', range.from.toISOString());
+  if (range.to && !isNaN(range.to)) params.set('to', range.to.toISOString());
+  if (prefs.unread) params.set('unread', '1');
+}
+
+function sellerToolbar() {
+  const s = state.seller;
+  if (s.q.trim()) {
+    return '<div class="seller-note">Поиск идёт по всем заказам — сортировка и фильтры подгрупп к нему не применяются.</div>';
+  }
+  const prefs = sellerPrefs(s.status);
+  const sortLabel = (SELLER_SORTS.find(([key]) => key === prefs.sort) || SELLER_SORTS[0])[1];
+  const n = activeSellerFilters(prefs, s.status);
+  const changed = n > 0 || prefs.sort !== 'created_desc';
+  return (
+    '<div class="seller-tools">' +
+      '<button class="tool-btn' + (s.panel ? ' on' : '') + (n ? ' active' : '') + '" data-action="seller-panel" ' +
+        'aria-expanded="' + s.panel + '">' +
+        '<span class="tool-text">⇅ ' + esc(sortLabel) + (n ? ' · фильтры: ' + n : '') + '</span>' +
+        '<span class="tool-caret">' + (s.panel ? '▴' : '▾') + '</span></button>' +
+      (changed ? '<button class="tool-reset" data-action="seller-reset">Сбросить</button>' : '') +
+    '</div>' +
+    (s.panel ? sellerPanel(prefs, s.status) : '')
+  );
+}
+
+function sellerPanel(prefs, group) {
+  const chip = (action, label, on) => (
+    '<button class="chip' + (on ? ' active' : '') + '" data-action="' + action + '" aria-pressed="' + on + '">' +
+      esc(label) + '</button>'
+  );
+  const statuses = SELLER_GROUP_STATUSES[group];
+  const titles = state.seller.titles || {};
+  return (
+    '<div class="seller-panel">' +
+      '<div class="panel-label">Сортировка</div>' +
+      '<div class="panel-chips">' +
+        SELLER_SORTS.map(([key, label]) => chip('seller-sort:' + key, label, prefs.sort === key)).join('') +
+      '</div>' +
+      (statuses
+        ? '<div class="panel-label">Статус</div><div class="panel-chips">' +
+            statuses.map((st) => chip('seller-st:' + st, titles[st] || st,
+              !prefs.statuses.length || prefs.statuses.indexOf(st) !== -1)).join('') +
+          '</div>'
+        : '') +
+      '<div class="panel-label">Период создания</div>' +
+      '<div class="panel-chips">' +
+        SELLER_PERIODS.map(([key, label]) => chip('seller-period:' + key, label, prefs.period === key)).join('') +
+      '</div>' +
+      (prefs.period === 'custom'
+        ? '<div class="panel-dates">' +
+            '<label>с <input type="date" id="sellerFrom" value="' + esc(prefs.from) + '"></label>' +
+            '<label>по <input type="date" id="sellerTo" value="' + esc(prefs.to) + '"></label>' +
+          '</div>'
+        : '') +
+      '<div class="panel-label">Сообщения</div>' +
+      '<div class="panel-chips">' + chip('seller-unread', 'Только непрочитанные', prefs.unread) + '</div>' +
+      (statuses
+        ? '<div class="panel-label">UDID</div><div class="panel-chips">' +
+            [['', 'Любой'], ['yes', 'Есть'], ['no', 'Нет']]
+              .map(([key, label]) => chip('seller-udid:' + key, label, prefs.udid === key)).join('') +
+          '</div>'
+        : '') +
+    '</div>'
+  );
+}
+
+/* Поменяли настройку подгруппы — сохраняем и перезапрашиваем список. */
+function sellerPrefsChanged() {
+  saveSellerPrefs();
+  guard(async () => { await loadSellerOrders(); render(); });
+}
+
+function toggleSellerStatus(status) {
+  const group = state.seller.status;
+  const all = SELLER_GROUP_STATUSES[group];
+  if (!all) return;
+  const prefs = sellerPrefs(group);
+  // Пустой список значит «все статусы».
+  let picked = prefs.statuses.length ? prefs.statuses.slice() : all.slice();
+  if (picked.indexOf(status) !== -1) {
+    if (picked.length === 1) {
+      toast('Хотя бы один статус должен остаться');
+      return;
+    }
+    picked = picked.filter((st) => st !== status);
+  } else {
+    picked.push(status);
+  }
+  prefs.statuses = picked.length === all.length ? [] : all.filter((st) => picked.indexOf(st) !== -1);
+  sellerPrefsChanged();
 }
 
 /* ------------------------------------------------------------- поставщик */
@@ -1386,10 +1586,10 @@ function bindInputs() {
   const receipt = document.getElementById('receiptFile');
   if (receipt) {
     receipt.addEventListener('change', () => {
-      const file = receipt.files && receipt.files[0];
-      // Сбрасываем поле: иначе повторный выбор того же файла не сработает.
+      const files = Array.from(receipt.files || []);
+      // Сбрасываем поле: иначе повторный выбор тех же файлов не сработает.
       receipt.value = '';
-      uploadReceipt(file);
+      uploadReceipts(files);
     });
   }
 
@@ -1420,6 +1620,15 @@ function bindInputs() {
       if (btn) btn.disabled = !state.agreeTerms;
     });
   }
+
+  ['sellerFrom', 'sellerTo'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener('change', () => {
+      sellerPrefs(state.seller.status)[id === 'sellerFrom' ? 'from' : 'to'] = input.value;
+      sellerPrefsChanged();
+    });
+  });
 
   const search = document.getElementById('sellerSearch');
   if (search) {
@@ -1506,24 +1715,91 @@ function copyValue(key) {
   else toast('Не получилось скопировать', true);
 }
 
-function uploadReceipt(file) {
+const RECEIPT_LIMIT = 15 * 1024 * 1024;
+const RECEIPT_FILES = 10;
+
+function sizeText(bytes) {
+  return (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' МБ';
+}
+
+/* Ход загрузки: процент на самой кнопке и тонкая полоса под ней. Экран ради
+   процентов не перерисовываем — меняем только эти два элемента. */
+function showUploadProgress(share) {
+  const btn = document.querySelector('[data-action="receipt-pick"]');
+  const bar = document.getElementById('uploadBar');
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.disabled = true;
+  const percent = Math.max(0, Math.min(100, Math.round(share * 100)));
+  // Файл дошёл до сервера, но он ещё пересылает его продавцу в Telegram.
+  btn.textContent = percent < 100 ? 'Загружаем… ' + percent + '%' : 'Отправляем продавцу…';
+  if (bar) {
+    bar.hidden = false;
+    bar.firstElementChild.style.width = percent + '%';
+  }
+}
+
+function resetUploadProgress() {
+  const btn = document.querySelector('[data-action="receipt-pick"]');
+  const bar = document.getElementById('uploadBar');
+  if (btn && btn.dataset.label) {
+    btn.textContent = btn.dataset.label;
+    delete btn.dataset.label;
+    btn.disabled = false;
+  }
+  if (bar) bar.hidden = true;
+}
+
+/* fetch не сообщает, сколько уже отправлено, поэтому файлы идут через XHR. */
+function postFiles(url, files, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    if (tg && tg.initData) xhr.setRequestHeader('X-Init-Data', tg.initData);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    };
+    xhr.upload.onload = () => onProgress(1);
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (e) { /* пустой ответ */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || 'Не удалось отправить файл'));
+    };
+    xhr.onerror = () => reject(new Error('Нет связи — файлы не отправлены'));
+    const form = new FormData();
+    files.forEach((file) => form.append('file', file));
+    xhr.send(form);
+  });
+}
+
+function uploadReceipts(files) {
   const order = state.boot.order;
-  if (!file || !order) return;
-  if (file.size > 15 * 1024 * 1024) { toast('Файл больше 15 МБ — пришлите поменьше', true); return; }
+  if (!files.length || !order) return;
+  if (files.length > RECEIPT_FILES) {
+    toast('Не больше ' + RECEIPT_FILES + ' файлов за раз', true);
+    return;
+  }
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  if (total > RECEIPT_LIMIT) {
+    toast((files.length > 1 ? 'Файлы вместе — ' : 'Файл — ') + sizeText(total) + ', а можно до 15 МБ', true);
+    return;
+  }
 
   guard(async () => {
-    const headers = {};
-    if (tg && tg.initData) headers['X-Init-Data'] = tg.initData;
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch('/api/order/receipt?orderId=' + order.id, {
-      method: 'POST', headers, body: form,
-    });
-    let data = {};
-    try { data = await res.json(); } catch (e) { /* пустой ответ */ }
-    if (!res.ok) throw new Error(data.error || 'Не удалось отправить файл');
+    showUploadProgress(0);
+    let data;
+    try {
+      data = await postFiles('/api/order/receipt?orderId=' + order.id, files, showUploadProgress);
+    } catch (err) {
+      resetUploadProgress();
+      throw err;
+    }
     if (data.order) state.boot.order = data.order;
-    toast(data.claimed ? 'Чек получен — заказ на проверке' : 'Чек отправлен продавцу');
+    const many = files.length > 1;
+    toast(data.claimed
+      ? (many ? 'Чеки получены' : 'Чек получен') + ' — заказ на проверке'
+      : (many ? 'Чеки отправлены продавцу' : 'Чек отправлен продавцу'));
     render();
   });
 }
@@ -1568,14 +1844,22 @@ async function refreshOrder() {
 
 function fetchSellerOrders() {
   const params = new URLSearchParams({ status: state.seller.status });
-  if (state.seller.q.trim()) params.set('q', state.seller.q.trim());
+  const q = state.seller.q.trim();
+  // Поиск — по всем заказам, поэтому настройки подгруппы к нему не прикладываем.
+  if (q) params.set('q', q);
+  else sellerParams(params, state.seller.status);
   return api('/api/seller/orders?' + params.toString());
 }
 
-async function loadSellerOrders() {
-  const data = await fetchSellerOrders();
+function applySellerData(data) {
   state.seller.orders = data.orders;
   state.seller.counts = data.counts || {};
+  state.seller.total = data.total || data.orders.length;
+  state.seller.titles = data.titles || state.seller.titles;
+}
+
+async function loadSellerOrders() {
+  applySellerData(await fetchSellerOrders());
 }
 
 async function loadSupplierOrders() {
@@ -1776,6 +2060,20 @@ const actions = {
   'seller-back': () => { state.seller.current = null; render(); },
 
   'supplier-back': () => { state.supplier.current = null; render(); },
+
+  'seller-panel': () => { state.seller.panel = !state.seller.panel; render(); },
+
+  'seller-reset': () => {
+    sellerPrefs(state.seller.status);
+    state.seller.prefs[state.seller.status] = defaultSellerPrefs();
+    sellerPrefsChanged();
+  },
+
+  'seller-unread': () => {
+    const prefs = sellerPrefs(state.seller.status);
+    prefs.unread = !prefs.unread;
+    sellerPrefsChanged();
+  },
 };
 
 function handleAction(raw) {
@@ -1822,6 +2120,22 @@ function handleAction(raw) {
       render();
       toast('Настройка заказа сохранена');
     });
+    return;
+  }
+  if (kind === 'seller-sort') {
+    sellerPrefs(state.seller.status).sort = value;
+    sellerPrefsChanged();
+    return;
+  }
+  if (kind === 'seller-st') { toggleSellerStatus(value); return; }
+  if (kind === 'seller-period') {
+    sellerPrefs(state.seller.status).period = value || '';
+    sellerPrefsChanged();
+    return;
+  }
+  if (kind === 'seller-udid') {
+    sellerPrefs(state.seller.status).udid = value || '';
+    sellerPrefsChanged();
     return;
   }
   if (kind === 'seller-filter') {

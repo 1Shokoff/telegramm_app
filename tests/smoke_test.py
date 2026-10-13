@@ -17,6 +17,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
@@ -56,6 +57,8 @@ from tests import fixtures  # noqa: E402
 # Витрина собирается из сборок в папке — тестам нужна своя папка с каталогом.
 os.environ["IPA_DIR"] = str(fixtures.catalog_folder())
 
+from aiogram.exceptions import TelegramRetryAfter  # noqa: E402
+from aiogram.methods import SendDocument  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
@@ -540,6 +543,44 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("файл больше 15 МБ — отказ с объяснением",
               res.status == 400 and "15 МБ" in answer.get("error", ""), str(answer))
 
+        # Несколько файлов за раз — вместе до 15 МБ.
+        bot.files.clear()
+        bot.sent.clear()
+        form = FormData()
+        for index, size_mb in enumerate((1, 1, 2), start=1):
+            form.add_field("file", os.urandom(size_mb * 1024 * 1024),
+                           filename="часть-%d.pdf" % index, content_type="application/pdf")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        answer = await res.json()
+        check("несколько файлов за раз принимаются",
+              res.status == 200 and len(answer.get("names", [])) == 3, str(answer)[:200])
+        check("продавцу ушли все три файла и следом итог",
+              len([1 for cid, _kind, _cap in bot.files if cid == SELLER]) == 3
+              and any("3 файла выше" in t for cid, t in bot.sent if cid == SELLER))
+
+        form = FormData()
+        for index in range(2):
+            form.add_field("file", b"\x00" * (8 * 1024 * 1024),
+                           filename="big-%d.bin" % index, content_type="application/octet-stream")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        answer = await res.json()
+        check("два файла по 8 МБ вместе больше 15 — отказ",
+              res.status == 400 and "вместе больше 15 МБ" in answer.get("error", ""), str(answer))
+
+        form = FormData()
+        for index in range(11):
+            form.add_field("file", b"x", filename="f%d.txt" % index, content_type="text/plain")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        answer = await res.json()
+        check("больше 10 файлов за раз — отказ",
+              res.status == 400 and "Не больше 10" in answer.get("error", ""), str(answer))
+
         res = await client.post(
             "/api/order/receipt/link", headers=buyer_headers,
             json={"orderId": order["id"], "url": "Вот ещё чек: https://bank.ru/r/2."},
@@ -811,6 +852,139 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
     )
 
 
+class FlakyBot(FakeBot):
+    """Первую отправку файла Telegram отклоняет: «слишком часто, подождите»."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refused = False
+
+    async def send_document(self, chat_id, document, caption=None, reply_markup=None):
+        if not self.refused:
+            self.refused = True
+            raise TelegramRetryAfter(
+                method=SendDocument(chat_id=chat_id, document="x"), message="Too Many Requests", retry_after=0
+            )
+        return await super().send_document(chat_id, document, caption=caption, reply_markup=reply_markup)
+
+
+async def test_receipt_batch(cfg) -> None:
+    print("\nЧек несколькими файлами")
+    bot = FlakyBot()
+    svc = OrderService(bot, cfg)
+    await db.upsert_user(610, "vera", "Вера")
+    order, _ = await svc.get_or_create_order(610)
+    order, claimed = await svc.submit_receipt(
+        order["id"], 610,
+        Receipt(title="скрин.png", file="photo-1", kind="photo"),
+        Receipt(title="чек.pdf", file="doc-1"),
+        Receipt(title="выписка.pdf", file="doc-2"),
+    )
+    check("несколько файлов сразу заявляют оплату", claimed and order["status"] == const.PAYMENT_CHECK)
+    files = [(kind, cap) for cid, kind, cap in bot.files if cid == SELLER]
+    check("продавцу пришли все файлы по порядку",
+          [kind for kind, _cap in files] == ["photo", "document", "document"], str(files))
+    check("у каждого файла подпись «файл N из 3»", all("из 3" in cap for _kind, cap in files))
+    check("Telegram попросил подождать — файл всё равно дошёл", bot.refused and len(files) == 3)
+    summary = [t for cid, t in bot.sent if cid == SELLER and "оплатил и приложил чек" in t]
+    check("следом карточка заказа с итогом",
+          len(summary) == 1 and "3 файла выше" in summary[0], str(summary)[:200])
+    events = [e for e in await db.list_events(order["id"]) if e["type"] == "receipt"]
+    check("каждый файл записан в журнал заказа", len(events) == 3, str(len(events)))
+
+
+async def test_seller_filters(cfg, bot: FakeBot, svc: OrderService) -> None:
+    """Сортировки и фильтры продавца — на своей базе, чтобы считать заказы точно."""
+    print("\nПродавец: сортировка и фильтры")
+    now = datetime.now(timezone.utc)
+
+    def ago(days: float = 0, hours: float = 0) -> str:
+        return (now - timedelta(days=days, hours=hours)).isoformat(timespec="seconds")
+
+    people = [(601, "dima", "Дима"), (602, "anna", "Анна"), (603, "boris", "Борис"), (604, None, "Яна")]
+    ids = []
+    for uid, username, name in people:
+        await db.upsert_user(uid, username, name)
+        order, _ = await svc.get_or_create_order(uid)
+        ids.append(order["id"])
+    a, b, c, d = ids
+    # a — ждёт оплаты, b — на проверке, c — ставим сертификат (есть UDID), d — отменён.
+    await svc.submit_receipt(b, 602, Receipt(title="чек.jpg", file="f", kind="photo"))
+    await svc.submit_receipt(c, 603, Receipt(title="чек.jpg", file="f", kind="photo"))
+    await svc.confirm_payment(c, "seller:%d" % SELLER)
+    await svc.submit_udid(c, MODERN_UDID, 603)
+    await svc.cancel(d, "seller:%d" % SELLER, by_seller=True)
+    # Чеки пишутся в переписку непрочитанными — гасим, непрочитанное оставим только у a.
+    await db.mark_seen(b, db.SELLER)
+    await db.mark_seen(c, db.SELLER)
+    await db.add_message(a, db.BUYER, 601, "Когда будет готово?")
+    # Время создания и последней активности задаём явно — после всех действий.
+    for oid, created, updated in (
+        (a, ago(40), ago(hours=1)), (b, ago(3), ago(2)), (c, ago(hours=2), ago(hours=3)), (d, ago(10), ago(9)),
+    ):
+        await db.conn().execute(
+            "UPDATE orders SET created_at = ?, updated_at = ? WHERE id = ?", (created, updated, oid)
+        )
+    await db.conn().commit()
+
+    app = build_app(cfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    seller = {"X-Init-Data": make_init_data(SELLER, "Продавец")}
+
+    async def listing(**params):
+        res = await client.get("/api/seller/orders", headers=seller, params=params)
+        data = await res.json()
+        return [o["id"] for o in data.get("orders", [])], data.get("total"), res.status
+
+    try:
+        got, total, _ = await listing(status="all")
+        check("по умолчанию — новые сверху", got == [d, c, b, a], str(got))
+        check("total — сколько подошло всего", total == 4, str(total))
+        got, *_ = await listing(status="all", sort="created_asc")
+        check("старые сверху", got == [a, b, c, d], str(got))
+        got, *_ = await listing(status="all", sort="activity")
+        check("последняя активность", got == [a, c, b, d], str(got))
+        got, *_ = await listing(status="all", sort="unread")
+        check("непрочитанные сверху, дальше новые", got == [a, d, c, b], str(got))
+        got, *_ = await listing(status="all", sort="buyer")
+        check("покупатель по алфавиту, безымянные в конце", got == [b, c, a, d], str(got))
+
+        got, total, _ = await listing(status="all", st="new,cancelled")
+        check("фильтр по статусам внутри «Все»", got == [d, a] and total == 2, str(got))
+        got, *_ = await listing(status="open", st="cancelled")
+        check("статус не из подгруппы ничего не добавляет", got == [], str(got))
+        got, *_ = await listing(status="open")
+        check("«Открытые» без отменённых", got == [c, b, a], str(got))
+
+        got, *_ = await listing(status="all", **{"from": ago(7)})
+        check("период: 7 дней", got == [c, b], str(got))
+        got, *_ = await listing(status="all", **{"from": ago(15), "to": ago(5)})
+        check("период: свои даты", got == [d], str(got))
+        got, *_ = await listing(status="all", **{"from": (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000Z")})
+        check("граница периода в формате браузера (…Z) понимается", got == [c, b], str(got))
+
+        got, *_ = await listing(status="all", unread="1")
+        check("только непрочитанные", got == [a], str(got))
+        got, *_ = await listing(status="all", udid="yes")
+        check("есть UDID", got == [c], str(got))
+        got, *_ = await listing(status="all", udid="no")
+        check("нет UDID", got == [d, b, a], str(got))
+        got, *_ = await listing(status="all", udid="no", sort="created_asc", st="new,payment_check")
+        check("фильтры и сортировка вместе", got == [a, b], str(got))
+
+        _ids, _total, status = await listing(status="all", **{"from": "вчера"})
+        check("кривая дата — 400", status == 400)
+        _ids, _total, status = await listing(status="all", sort="price")
+        check("неизвестная сортировка — 400", status == 400)
+
+        code = (await db.get_order(c))["code"]
+        got, *_ = await listing(status="done", q=code, unread="1", udid="no")
+        check("поиск идёт мимо фильтров подгруппы", got == [c], str(got))
+    finally:
+        await client.close()
+
+
 def bump(path: pathlib.Path, seconds: int) -> None:
     """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
     moment = time.time() + seconds
@@ -977,7 +1151,13 @@ async def main() -> int:
     await test_close_and_reorder(cfg, bot, svc)
     await test_app_orders(cfg, bot, svc)
     await test_supplier(cfg, bot, svc)
+    await test_receipt_batch(cfg)
     await test_ipa(cfg, bot, svc)
+
+    # Фильтрам продавца нужна своя база: в общей заказы остальных проверок.
+    await db.close()
+    await db.init(os.path.join(tmp, "filters.sqlite3"))
+    await test_seller_filters(cfg, bot, svc)
 
     await db.close()
 

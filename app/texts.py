@@ -15,17 +15,22 @@ def money(rub: int) -> str:
     return "{:,} ₽".format(rub).replace(",", " ")
 
 
-def apps_count(n: int) -> str:
-    """«1 приложение», «2 приложения», «24 приложения», «25 приложений»."""
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """plural(3, «файл», «файла», «файлов») → «3 файла»."""
     tail = n % 100
     last = n % 10
     if 11 <= tail <= 14 or last == 0 or last >= 5:
-        word = "приложений"
+        word = many
     elif last == 1:
-        word = "приложение"
+        word = one
     else:
-        word = "приложения"
+        word = few
     return "%d %s" % (n, word)
+
+
+def apps_count(n: int) -> str:
+    """«1 приложение», «2 приложения», «24 приложения», «25 приложений»."""
+    return plural(n, "приложение", "приложения", "приложений")
 
 
 def e(value: object) -> str:
@@ -275,6 +280,18 @@ def receipt_caption(order: dict, header: str, title: str) -> str:
         user_line(order),
         money(order["price_rub"]),
         e(title[:200]),
+    )
+
+
+def receipt_part_caption(order: dict, index: int, total: int, title: str) -> str:
+    """Подпись к одному из нескольких файлов чека: карточка с кнопками придёт следом."""
+    return "🧾 Чек к заказу %s · файл %d из %d\n%s" % (e(order["code"]), index, total, e(title[:200]))
+
+
+def receipt_summary(order: dict, header: str, count: int) -> str:
+    """Карточка заказа после пачки файлов чека — с ней приходят кнопки продавца."""
+    return "%s\n\n%s\n\nЧек — %s выше." % (
+        header, seller_order_card(order), plural(count, "файл", "файла", "файлов")
     )
 
 

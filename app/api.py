@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiogram.types import BufferedInputFile
@@ -47,6 +48,12 @@ RECEIPT_LIMIT = 15 * 1024 * 1024
 # Фото Telegram принимает только в этих форматах и до 10 МБ — остальное уходит файлом.
 PHOTO_TYPES = ("image/jpeg", "image/png", "image/webp")
 PHOTO_LIMIT = 10 * 1024 * 1024
+# Несколько файлов за раз — вместе до RECEIPT_LIMIT. Больше десяти продавцу
+# пришлось бы пролистывать, а Telegram начал бы притормаживать отправку.
+RECEIPT_FILES = 10
+
+# Список продавца: больше этого за раз не отдаём, но сообщаем, сколько подошло всего.
+SELLER_LIMIT = 100
 
 
 def catalog_public(cfg: Config) -> list[dict]:
@@ -373,40 +380,60 @@ async def claim(request: web.Request) -> web.Response:
 
 @routes.post("/api/order/receipt")
 async def upload_receipt(request: web.Request) -> web.Response:
-    """Чек об оплате из витрины: отдаём его Telegram, у себя файл не храним."""
+    """Чек об оплате из витрины: один файл или несколько, вместе до 15 МБ.
+
+    Файлы отдаём Telegram, у себя не храним.
+    """
     user = await current_user(request)
     try:
         order_id = int(request.query.get("orderId", 0))
     except ValueError:
         raise ApiError("Некорректный orderId")
-
     try:
-        field = await (await request.multipart()).next()
+        reader = await request.multipart()
     except Exception:
         raise ApiError("Ожидался файл")
-    if field is None or field.name != "file":
-        raise ApiError("Ожидался файл")
 
-    content_type = (field.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-
-    data = bytearray()
+    receipts: list[Receipt] = []
+    total = 0
     while True:
-        chunk = await field.read_chunk()
-        if not chunk:
+        try:
+            field = await reader.next()
+        except Exception:
+            raise ApiError("Не удалось прочитать файлы — попробуйте ещё раз")
+        if field is None:
             break
-        data.extend(chunk)
-        if len(data) > RECEIPT_LIMIT:
-            raise ApiError("Файл больше 15 МБ — пришлите поменьше")
-    if not data:
-        raise ApiError("Файл пустой")
+        if field.name != "file":
+            continue
+        if len(receipts) >= RECEIPT_FILES:
+            raise ApiError("Не больше %d файлов за раз" % RECEIPT_FILES)
 
-    name = field.filename or "чек"
-    kind = "photo" if content_type in PHOTO_TYPES and len(data) <= PHOTO_LIMIT else "document"
-    file = BufferedInputFile(bytes(data), filename=name)
-    order, claimed = await service_of(request).submit_receipt(
-        order_id, user.id, Receipt(title=name, file=file, kind=kind)
-    )
-    return web.json_response({"ok": True, "name": name, "claimed": claimed, "order": order_public(order)})
+        content_type = (field.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        data = bytearray()
+        while True:
+            chunk = await field.read_chunk()
+            if not chunk:
+                break
+            data.extend(chunk)
+            total += len(chunk)
+            if total > RECEIPT_LIMIT:
+                raise ApiError("Файлы вместе больше 15 МБ — пришлите поменьше")
+        name = field.filename or "чек"
+        if not data:
+            raise ApiError("Файл «%s» пустой" % name)
+        kind = "photo" if content_type in PHOTO_TYPES and len(data) <= PHOTO_LIMIT else "document"
+        file = BufferedInputFile(bytes(data), filename=name)
+        receipts.append(Receipt(title=name, file=file, kind=kind))
+
+    if not receipts:
+        raise ApiError("Ожидался файл")
+    order, claimed = await service_of(request).submit_receipt(order_id, user.id, *receipts)
+    return web.json_response({
+        "ok": True,
+        "names": [r.title for r in receipts],
+        "claimed": claimed,
+        "order": order_public(order),
+    })
 
 
 @routes.post("/api/order/receipt/link")
@@ -607,15 +634,59 @@ async def check_udid(request: web.Request) -> web.Response:
 # ------------------------------------------------------------------ продавец
 
 
+def moment_of(raw: str | None) -> str | None:
+    """Граница периода из витрины (ISO с поясом) → формат базы: UTC, до секунд."""
+    if not raw:
+        return None
+    try:
+        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise ApiError("Некорректная дата: %s" % raw)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def seller_filters(query) -> dict:
+    """Фильтры подгруппы из адреса: статусы, период, непрочитанные, UDID."""
+    out: dict = {}
+    statuses = [s for s in (query.get("st") or "").split(",") if s in const.TITLES]
+    if statuses:
+        out["statuses"] = statuses
+    created_from = moment_of(query.get("from"))
+    if created_from:
+        out["created_from"] = created_from
+    created_to = moment_of(query.get("to"))
+    if created_to:
+        out["created_to"] = created_to
+    if query.get("unread") == "1":
+        out["unread_only"] = True
+    if query.get("udid") in ("yes", "no"):
+        out["has_udid"] = query.get("udid") == "yes"
+    return out
+
+
 @routes.get("/api/seller/orders")
 async def seller_orders(request: web.Request) -> web.Response:
+    """Заказы продавца. Подгруппа (status) приходит со своими сортировкой и
+    фильтрами — их выбирает и хранит витрина, у каждой подгруппы свои."""
     await require_seller(request)
     status = request.query.get("status") or "open"
     query = (request.query.get("q") or "").strip() or None
-    # Поиск идёт по всем заказам: искать код внутри одного фильтра бессмысленно.
+    sort = "created_desc"
+    filters: dict = {}
     if query:
+        # Поиск идёт по всем заказам: искать код внутри одного фильтра бессмысленно.
         status = "all"
-    orders = await db.list_orders(status=None if status == "all" else status, query=query, limit=100)
+    else:
+        sort = request.query.get("sort") or sort
+        if sort not in db.ORDER_SORTS:
+            raise ApiError("Неизвестная сортировка: %s" % sort)
+        filters = seller_filters(request.query)
+
+    scope = dict(status=None if status == "all" else status, query=query, **filters)
+    orders = await db.list_orders(sort=sort, limit=SELLER_LIMIT, **scope)
+    total = await db.count_orders(**scope)
     counts = await db.status_counts()
     unread = await db.unread_by_order(db.SELLER)
 
@@ -629,6 +700,7 @@ async def seller_orders(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "orders": payload,
+            "total": total,
             "counts": counts,
             "titles": const.TITLES,
             "unreadTotal": sum(unread.values()),

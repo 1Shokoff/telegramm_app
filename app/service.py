@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 from aiogram.types import InlineKeyboardMarkup
 
 from . import catalog, const, db, keyboards, texts, udid as udid_mod
@@ -189,8 +196,8 @@ class OrderService:
             raise ServiceError("Заказ не найден.")
         return order
 
-    async def submit_receipt(self, order_id: int, actor_id: int, receipt: Receipt) -> tuple[dict, bool]:
-        """Чек об оплате от покупателя: фото, файл или ссылка.
+    async def submit_receipt(self, order_id: int, actor_id: int, *receipts: Receipt) -> tuple[dict, bool]:
+        """Чек об оплате от покупателя: фото, файл, несколько файлов или ссылка.
 
         Для неоплаченного заказа в режиме manual чек и есть заявка об оплате:
         без чека заказ на проверку не уходит. Продавцу приходит одно сообщение —
@@ -207,11 +214,14 @@ class OrderService:
             raise ServiceError("Это не ваш заказ.")
         if order["status"] not in const.OPEN_STATUSES:
             raise ServiceError("Заказ закрыт — чек уже не нужен.")
-        if receipt.url:
-            if len(receipt.url) > LINK_LIMIT or not LINK_RE.fullmatch(receipt.url):
-                raise ServiceError("Ссылка на чек должна начинаться с https:// или http://.")
-        elif receipt.file is None:
+        if not receipts:
             raise ServiceError(texts.RECEIPT_REQUIRED)
+        for receipt in receipts:
+            if receipt.url:
+                if len(receipt.url) > LINK_LIMIT or not LINK_RE.fullmatch(receipt.url):
+                    raise ServiceError("Ссылка на чек должна начинаться с https:// или http://.")
+            elif receipt.file is None:
+                raise ServiceError(texts.RECEIPT_REQUIRED)
 
         actor = "user:%d" % actor_id
         claimed = order["status"] == const.NEW and order["payment_mode"] == "manual"
@@ -232,43 +242,89 @@ class OrderService:
         for seller_id in self.cfg.seller_ids:
             if not await self.allowed(seller_id, kind, order_id):
                 continue
-            if await self._send_receipt(seller_id, full, header, receipt, kb):
+            if len(receipts) == 1:
+                delivered = await self._send_receipt(seller_id, full, header, receipts[0], kb)
+            else:
+                delivered = await self._send_receipts(seller_id, full, header, receipts, kb)
+            if delivered:
                 sent += 1
 
-        note = "🔗 Ссылка на чек: %s" % receipt.url if receipt.url else "🧾 Чек об оплате: %s" % receipt.title
-        await db.add_message(order_id, db.BUYER, actor_id, note)
-        await db.add_event(order_id, actor, "receipt", receipt.url or receipt.title)
+        for receipt in receipts:
+            note = "🔗 Ссылка на чек: %s" % receipt.url if receipt.url else "🧾 Чек об оплате: %s" % receipt.title
+            await db.add_message(order_id, db.BUYER, actor_id, note)
+            await db.add_event(order_id, actor, "receipt", receipt.url or receipt.title)
         if not sent:
             log.warning("Чек по заказу %s никому не доставлен", order["code"])
         return order, claimed
 
+    async def _send_receipts(
+        self, seller_id: int, order: dict, header: str, receipts: tuple[Receipt, ...], kb: InlineKeyboardMarkup
+    ) -> bool:
+        """Несколько файлов чека: сначала файлы, следом карточка заказа с кнопками —
+        продавец решает, когда всё уже перед глазами."""
+        delivered = 0
+        for index, receipt in enumerate(receipts, start=1):
+            caption = texts.receipt_part_caption(order, index, len(receipts), receipt.title)
+            if await self._send_receipt(seller_id, order, header, receipt, None, caption=caption):
+                delivered += 1
+        summary = texts.receipt_summary(order, header, len(receipts))
+        return await self._deliver(seller_id, self.bot.send_message, seller_id, summary, reply_markup=kb) and delivered > 0
+
+    async def _deliver(self, seller_id: int, method, *args, **kwargs) -> bool:
+        """Отправка продавцу с одним повтором после «слишком часто» от Telegram.
+
+        Пачка файлов — это десяток сообщений подряд, и Telegram может попросить
+        подождать. Ошибка отправки не должна обрывать запрос: заказ уже на проверке.
+        """
+        for attempt in (1, 2):
+            try:
+                await method(*args, **kwargs)
+                return True
+            except TelegramRetryAfter as exc:
+                if attempt == 2:
+                    log.warning("Telegram просит подождать с отправкой продавцу %s: %s", seller_id, exc)
+                    return False
+                await asyncio.sleep(exc.retry_after)
+            except TelegramForbiddenError:
+                await db.set_blocked(seller_id, True)
+                return False
+            except (TelegramBadRequest, TelegramNetworkError, TelegramAPIError) as exc:
+                log.warning("Не отправили чек продавцу %s: %s", seller_id, exc)
+                return False
+        return False
+
     async def _send_receipt(
-        self, seller_id: int, order: dict, header: str, receipt: Receipt, kb: InlineKeyboardMarkup
+        self,
+        seller_id: int,
+        order: dict,
+        header: str,
+        receipt: Receipt,
+        kb: InlineKeyboardMarkup | None,
+        caption: str | None = None,
     ) -> bool:
         """Файл уходит с короткой подписью — у Telegram на неё лимит 1024 знака;
         ссылка — обычным сообщением с полной карточкой заказа."""
-        try:
-            if receipt.url:
-                text = texts.receipt_link_message(order, header, receipt.url)
-                await self.bot.send_message(seller_id, text, reply_markup=kb)
-                return True
+        if receipt.url:
+            text = texts.receipt_link_message(order, header, receipt.url)
+            return await self._deliver(seller_id, self.bot.send_message, seller_id, text, reply_markup=kb)
+        if caption is None:
             caption = texts.receipt_caption(order, header, receipt.title)
+        try:
             if receipt.kind == "photo":
-                try:
-                    await self.bot.send_photo(seller_id, receipt.file, caption=caption, reply_markup=kb)
-                except TelegramBadRequest:
-                    # Картинку не взяли как фото (размер, пропорции) — отправим файлом.
-                    await self.bot.send_document(seller_id, receipt.file, caption=caption, reply_markup=kb)
-            elif receipt.kind == "video":
-                await self.bot.send_video(seller_id, receipt.file, caption=caption, reply_markup=kb)
-            else:
-                await self.bot.send_document(seller_id, receipt.file, caption=caption, reply_markup=kb)
-            return True
+                await self.bot.send_photo(seller_id, receipt.file, caption=caption, reply_markup=kb)
+                return True
+        except TelegramBadRequest:
+            pass  # картинку не взяли как фото (размер, пропорции) — отправим файлом
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
         except TelegramForbiddenError:
             await db.set_blocked(seller_id, True)
-        except TelegramBadRequest as exc:
+            return False
+        except (TelegramNetworkError, TelegramAPIError) as exc:
             log.warning("Не отправили чек продавцу %s: %s", seller_id, exc)
-        return False
+            return False
+        send = self.bot.send_video if receipt.kind == "video" else self.bot.send_document
+        return await self._deliver(seller_id, send, seller_id, receipt.file, caption=caption, reply_markup=kb)
 
     async def confirm_payment(self, order_id: int, actor: str, ref: str | None = None) -> dict:
         order = await self._load(order_id)
