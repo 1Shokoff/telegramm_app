@@ -439,7 +439,14 @@ async def _receipt(message: Message, cfg: Config, service: OrderService, receipt
 async def receipt_photo(message: Message, cfg: Config, service: OrderService) -> None:
     photo = message.photo[-1]
     title = message.caption or "скриншот перевода"
-    await _receipt(message, cfg, service, Receipt(title=title, file=photo.file_id, is_photo=True))
+    await _receipt(message, cfg, service, Receipt(title=title, file=photo.file_id, kind="photo"))
+
+
+@router.message(F.video)
+async def receipt_video(message: Message, cfg: Config, service: OrderService) -> None:
+    """Запись экрана из галереи Telegram шлёт видео, а не файлом — это тоже чек."""
+    title = message.video.file_name or message.caption or "видео"
+    await _receipt(message, cfg, service, Receipt(title=title, file=message.video.file_id, kind="video"))
 
 
 @router.message(F.document)
@@ -484,7 +491,10 @@ async def free_text(message: Message, cfg: Config, service: OrderService) -> Non
             return
         reply = "Отправлено продавцу по заказу <b>%s</b>. Ответ придёт сюда." % texts.e(order["code"])
         if order["status"] == const.PAID:
-            reply += "\n\nЕсли это был UDID — проверьте номер: нужно 40 символов."
+            reply += (
+                "\n\nЕсли это был UDID — скопируйте его целиком: в нём бывают "
+                "только цифры, латинские буквы A–F и дефис."
+            )
         if awaiting_receipt:
             reply += "\n\nЧтобы заказ ушёл на проверку оплаты, пришлите чек — скриншот, PDF или ссылку."
         await message.answer(reply, reply_markup=keyboards.buyer_order_kb(cfg, order))

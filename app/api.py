@@ -42,9 +42,11 @@ def asset_version() -> str:
     return "%x" % int(newest)
 
 
-RECEIPT_LIMIT = 10 * 1024 * 1024
-PHOTO_TYPES = ("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif")
-RECEIPT_TYPES = PHOTO_TYPES + ("application/pdf",)
+# Чек — любой файл до 15 МБ: банки отдают их в самых разных форматах.
+RECEIPT_LIMIT = 15 * 1024 * 1024
+# Фото Telegram принимает только в этих форматах и до 10 МБ — остальное уходит файлом.
+PHOTO_TYPES = ("image/jpeg", "image/png", "image/webp")
+PHOTO_LIMIT = 10 * 1024 * 1024
 
 
 def catalog_public(cfg: Config) -> list[dict]:
@@ -274,6 +276,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "about": about_block(cfg),
             # Шаги инструкции: витрина показывает их на выполненном заказе.
             "instruction": {
+                "developerMode": instruction_mod.developer_mode(),
                 "steps": instruction_mod.public_steps(),
                 "bots": instruction_mod.bot_links(),
                 "sources": instruction_mod.sources(),
@@ -385,8 +388,6 @@ async def upload_receipt(request: web.Request) -> web.Response:
         raise ApiError("Ожидался файл")
 
     content_type = (field.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-    if content_type not in RECEIPT_TYPES:
-        raise ApiError("Подойдёт картинка или PDF")
 
     data = bytearray()
     while True:
@@ -395,14 +396,15 @@ async def upload_receipt(request: web.Request) -> web.Response:
             break
         data.extend(chunk)
         if len(data) > RECEIPT_LIMIT:
-            raise ApiError("Файл больше 10 МБ — пришлите поменьше")
+            raise ApiError("Файл больше 15 МБ — пришлите поменьше")
     if not data:
         raise ApiError("Файл пустой")
 
-    name = field.filename or ("чек.pdf" if content_type == "application/pdf" else "чек.jpg")
+    name = field.filename or "чек"
+    kind = "photo" if content_type in PHOTO_TYPES and len(data) <= PHOTO_LIMIT else "document"
     file = BufferedInputFile(bytes(data), filename=name)
     order, claimed = await service_of(request).submit_receipt(
-        order_id, user.id, Receipt(title=name, file=file, is_photo=content_type in PHOTO_TYPES)
+        order_id, user.id, Receipt(title=name, file=file, kind=kind)
     )
     return web.json_response({"ok": True, "name": name, "claimed": claimed, "order": order_public(order)})
 

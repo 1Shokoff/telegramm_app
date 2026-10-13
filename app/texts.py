@@ -82,7 +82,7 @@ def steps_block(order: dict) -> str:
 HINTS = {
     const.NEW: "Оплатите заказ, чтобы продолжить.",
     const.PAYMENT_CHECK: "Мы проверяем оплату. Обычно это занимает немного времени.",
-    const.PAID: "Пришлите UDID вашего iPhone — 40 символов.",
+    const.PAID: "Пришлите UDID вашего iPhone.",
     const.UDID: "UDID у продавца. Идёт подготовка сертификата.",
     const.INSTALLED: "Сертификат готов, собираем инструкцию по установке.",
     const.DONE: "Заказ закрыт. Инструкция отправлена в этот чат.",
@@ -224,8 +224,16 @@ def instruction_message(order: dict, webapp_enabled: bool) -> str:
     lines = [
         "📄 <b>Инструкция по заказу %s</b>" % e(order["code"]),
         "",
-        "Понадобятся два бота:",
     ]
+
+    # Режим разработчика — до всего остального: без него приложение не запустится.
+    developer = instruction_mod.DEVELOPER_MODE
+    lines.append("⚙️ <b>%s</b>" % e(developer["title"]))
+    for step in developer["steps"]:
+        lines.append("• %s" % e(step))
+    lines.append("<i>%s</i>" % e(developer["note"]))
+    lines.append("")
+    lines.append("Понадобятся два бота:")
     for bot in instruction_mod.BOTS:
         lines.append("• @%s — %s" % (e(bot["username"]), e(bot["hint"])))
     lines.append("")
@@ -282,8 +290,8 @@ def udid_request(guide_url: str = "") -> str:
     lines = [
         "<b>Теперь добавьте iPhone</b>",
         "",
-        "Нужен <b>UDID</b> — идентификатор устройства из 40 символов "
-        "(цифры и латинские буквы от a до f).",
+        "Нужен <b>UDID</b> — идентификатор устройства из цифр и латинских букв A–F. "
+        "У новых iPhone он с дефисом: <code>00008150-000914312E78C01C</code>.",
         "",
         "<b>Как узнать UDID прямо на iPhone, без компьютера</b>",
         "1. Откройте в Safari сайт <b>udid.tech</b>",

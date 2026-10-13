@@ -35,7 +35,7 @@ class Receipt:
 
     title: str               # имя файла или сама ссылка — для продавца и журнала
     file: object = None      # file_id из бота или BufferedInputFile из витрины
-    is_photo: bool = False
+    kind: str = "document"   # photo, video или document — как переслать продавцу
     url: str = ""
 
 
@@ -251,11 +251,17 @@ class OrderService:
             if receipt.url:
                 text = texts.receipt_link_message(order, header, receipt.url)
                 await self.bot.send_message(seller_id, text, reply_markup=kb)
-            elif receipt.is_photo:
-                caption = texts.receipt_caption(order, header, receipt.title)
-                await self.bot.send_photo(seller_id, receipt.file, caption=caption, reply_markup=kb)
+                return True
+            caption = texts.receipt_caption(order, header, receipt.title)
+            if receipt.kind == "photo":
+                try:
+                    await self.bot.send_photo(seller_id, receipt.file, caption=caption, reply_markup=kb)
+                except TelegramBadRequest:
+                    # Картинку не взяли как фото (размер, пропорции) — отправим файлом.
+                    await self.bot.send_document(seller_id, receipt.file, caption=caption, reply_markup=kb)
+            elif receipt.kind == "video":
+                await self.bot.send_video(seller_id, receipt.file, caption=caption, reply_markup=kb)
             else:
-                caption = texts.receipt_caption(order, header, receipt.title)
                 await self.bot.send_document(seller_id, receipt.file, caption=caption, reply_markup=kb)
             return True
         except TelegramForbiddenError:

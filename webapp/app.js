@@ -283,7 +283,7 @@ function requisiteRow(row) {
 /* Ещё один чек к заказу, который уже на проверке: например, PDF вдогонку к скриншоту. */
 function receiptBlock() {
   return (
-    '<input type="file" id="receiptFile" accept="image/*,application/pdf" hidden>' +
+    '<input type="file" id="receiptFile" hidden>' +
     '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить ещё чек</button>' +
     '<div class="cta-note">Скриншот перевода или чек из банка — продавец увидит его ' +
       'в заказе. Ссылку на документ можно прислать сообщением в чат.</div>'
@@ -297,9 +297,9 @@ function proofBlock() {
   return (
     '<div class="proof">' +
       '<div class="proof-title">Подтвердите оплату</div>' +
-      '<div class="proof-note">После перевода прикрепите чек — скриншот, PDF или ссылку. ' +
-        'Без чека заказ не уйдёт на проверку.</div>' +
-      '<input type="file" id="receiptFile" accept="image/*,application/pdf" hidden>' +
+      '<div class="proof-note">После перевода прикрепите чек — скриншот, PDF, любой другой ' +
+        'файл до 15 МБ или ссылку. Без чека заказ не уйдёт на проверку.</div>' +
+      '<input type="file" id="receiptFile" hidden>' +
       '<button class="btn btn-primary" data-action="receipt-pick">📎 Я оплатил — прикрепить чек</button>' +
       '<div class="proof-link">' +
         '<input class="search" id="receiptLink" type="url" inputmode="url" autocomplete="off" ' +
@@ -403,7 +403,7 @@ function viewWaitingPayment(order) {
 function viewUdid(order) {
   const b = state.boot;
   const len = state.udid.length;
-  const ready = len === 40 && state.agreeUdid && !state.busy;
+  const ready = len > 0 && state.agreeUdid && !state.busy;
 
   return (
     stepper(2) +
@@ -418,7 +418,8 @@ function viewUdid(order) {
       '3. Зайдите в Настройки → Профиль загружен → Установить. ' +
       'Если попросит, введите код-пароль iPhone\n' +
       '4. После установки откроется страница с вашим UDID — скопируйте его\n\n' +
-      'UDID — 40 символов: цифры и латинские буквы от a до f.</div>' +
+      'UDID состоит из цифр и латинских букв A–F. У новых iPhone он короче и с дефисом: ' +
+      '00008150-000914312E78C01C.</div>' +
       '<button class="btn btn-secondary btn-sm mt" data-action="open-udid-site">' +
         'Открыть udid.tech</button>' +
       '<img class="guide" src="/static/img/udid-guide.webp" loading="lazy" ' +
@@ -427,10 +428,10 @@ function viewUdid(order) {
     '<div class="field">' +
       '<label for="udidInput">UDID устройства</label>' +
       '<input id="udidInput" class="udid" autocomplete="off" autocapitalize="off" spellcheck="false" ' +
-      'enterkeyhint="send" ' +
-      'placeholder="40 символов" value="' + esc(state.udid) + '">' +
+      'enterkeyhint="send" maxlength="40" ' +
+      'placeholder="Вставьте UDID" value="' + esc(state.udid) + '">' +
       '<div class="field-foot"><span>Можно вставить из буфера</span>' +
-      '<span class="count' + (len === 40 ? ' full' : '') + '" id="udidCount">' + len + ' / 40</span></div>' +
+      '<span class="count" id="udidCount">' + len + ' / 40</span></div>' +
       (state.udidError ? '<div class="field-error">' + esc(state.udidError) + '</div>' : '') +
     '</div>' +
     (b.testUdid ? '<button class="linkish" data-action="udid-test">Использовать тестовый номер</button>' : '') +
@@ -675,6 +676,23 @@ function instructionStep(step, total) {
   );
 }
 
+/* Режим разработчика — до всех шагов: без него iOS 16 и новее не запустит
+   приложение, подписанное сертификатом разработчика. */
+function developerModeBlock(dev) {
+  if (!dev) return '';
+  return (
+    '<div class="instr-dev">' +
+      '<div class="instr-dev-title">⚙️ ' + esc(dev.title) + '</div>' +
+      '<ol class="instr-dev-steps">' +
+        dev.steps.map((step) => '<li>' + esc(step) + '</li>').join('') +
+      '</ol>' +
+      '<img class="instr-dev-img" src="' + esc(dev.image) + '" loading="lazy" ' +
+        'alt="Настройки → Конфиденциальность и безопасность → Режим разработчика">' +
+      (dev.note ? '<div class="instr-dev-note">' + esc(dev.note) + '</div>' : '') +
+    '</div>'
+  );
+}
+
 function instructionBlock(order) {
   const data = (state.boot && state.boot.instruction) || { steps: [], bots: [] };
   if (!data.steps.length) return '';
@@ -691,6 +709,7 @@ function instructionBlock(order) {
     '<div class="section-head mt"><h2>Инструкция по установке</h2>' +
       '<span class="badge">' + data.steps.length + ' шагов</span></div>' +
     '<div class="card instr">' +
+      developerModeBlock(data.developerMode) +
       '<p class="muted">Всё делается в двух ботах: сначала получаем сертификат, ' +
         'потом подписываем и ставим приложение.</p>' +
       '<div class="instr-bots">' + bots + '</div>' +
@@ -1340,17 +1359,16 @@ function bindInputs() {
   const udid = document.getElementById('udidInput');
   if (udid) {
     udid.addEventListener('input', () => {
-      const clean = udid.value.replace(/[^0-9a-fA-F]+/g, '').toLowerCase().slice(0, 40);
+      // Убираем только пробелы и переносы: дефис и регистр — часть номера,
+      // а лишние символы покажет проверка на сервере, а не молча съест поле.
+      const clean = udid.value.replace(/\s+/g, '').slice(0, 40);
       if (udid.value !== clean) udid.value = clean;
       state.udid = clean;
       state.udidChecked = null;
       const count = document.getElementById('udidCount');
-      if (count) {
-        count.textContent = clean.length + ' / 40';
-        count.className = 'count' + (clean.length === 40 ? ' full' : '');
-      }
+      if (count) count.textContent = clean.length + ' / 40';
       const btn = document.getElementById('udidBtn');
-      if (btn) btn.disabled = !(clean.length === 40 && state.agreeUdid);
+      if (btn) btn.disabled = !(clean.length > 0 && state.agreeUdid);
       // Старая ошибка к исправленному номеру уже не относится.
       if (state.udidError) {
         state.udidError = null;
@@ -1361,7 +1379,7 @@ function bindInputs() {
     udid.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      if (state.udid.length === 40 && state.agreeUdid) handleAction('udid-send');
+      if (state.udid.length > 0 && state.agreeUdid) handleAction('udid-send');
     });
   }
 
@@ -1390,7 +1408,7 @@ function bindInputs() {
     agreeUdid.addEventListener('change', () => {
       state.agreeUdid = agreeUdid.checked;
       const btn = document.getElementById('udidBtn');
-      if (btn) btn.disabled = !(state.udid.length === 40 && state.agreeUdid);
+      if (btn) btn.disabled = !(state.udid.length > 0 && state.agreeUdid);
     });
   }
 
@@ -1491,7 +1509,7 @@ function copyValue(key) {
 function uploadReceipt(file) {
   const order = state.boot.order;
   if (!file || !order) return;
-  if (file.size > 10 * 1024 * 1024) { toast('Файл больше 10 МБ', true); return; }
+  if (file.size > 15 * 1024 * 1024) { toast('Файл больше 15 МБ — пришлите поменьше', true); return; }
 
   guard(async () => {
     const headers = {};

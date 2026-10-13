@@ -65,6 +65,8 @@ from app.config import load_config  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
 
 SPACED_UDID = "2b6f0cc904d137be2e17 30235f5664094b831186"
+# Новый формат (iPhone XS и новее): 25 символов с дефисом, буквы заглавные.
+MODERN_UDID = "00008150-000914312E78C01C"
 
 failures: list[str] = []
 
@@ -120,11 +122,21 @@ def test_udid() -> None:
     print("\nUDID")
     check("тестовый номер валиден", udid_mod.validate(udid_mod.TEST_UDID)[0] == udid_mod.TEST_UDID)
     check("пробелы вычищаются", udid_mod.validate(SPACED_UDID)[0] == udid_mod.TEST_UDID)
-    check("верхний регистр приводится", udid_mod.validate(udid_mod.TEST_UDID.upper())[0] == udid_mod.TEST_UDID)
-    check("39 символов отклоняются", udid_mod.validate(udid_mod.TEST_UDID[:-1])[0] is None)
-    check("недопустимые символы отклоняются", udid_mod.validate("z" * 40)[0] is None)
-    check("IMEI распознаётся отдельно", "IMEI" in (udid_mod.validate("490154203237518")[1] or ""))
-    check("новый формат распознаётся", "25" in (udid_mod.validate("00008030-001C2D3E1E88802E")[1] or ""))
+    check("новый формат принимается как есть — с дефисом и регистром",
+          udid_mod.validate(MODERN_UDID)[0] == MODERN_UDID)
+    check("регистр не меняется",
+          udid_mod.validate(udid_mod.TEST_UDID.upper())[0] == udid_mod.TEST_UDID.upper())
+    check("длина любая: 39 символов проходят",
+          udid_mod.validate(udid_mod.TEST_UDID[:-1])[0] == udid_mod.TEST_UDID[:-1])
+    check("короткий номер проходит", udid_mod.validate("00008150")[0] == "00008150")
+    check("длиннее 40 — отказ", udid_mod.validate("a" * 41)[0] is None)
+    check("чужие символы отклоняются", udid_mod.validate("z" * 40)[0] is None)
+    lookalike = MODERN_UDID.replace("E", "\u0415").replace("C", "\u0421")  # кириллические Е и С
+    check("кириллица вместо латиницы отклоняется", udid_mod.validate(lookalike)[0] is None)
+    check("пустой — отказ", udid_mod.validate("  \n ")[0] is None)
+    check("одни дефисы — отказ", udid_mod.validate("---")[0] is None)
+    check("новый формат в чате узнаётся как номер", udid_mod.looks_like_attempt(MODERN_UDID))
+    check("короткий текст в чате — не номер", not udid_mod.looks_like_attempt("12345"))
     check("маска скрывает номер", udid_mod.mask(udid_mod.TEST_UDID).endswith("1186"))
 
 
@@ -174,7 +186,7 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     bot.sent.clear()
     bot.files.clear()
     order, claimed = await svc.submit_receipt(
-        order["id"], BUYER, Receipt(title="перевод.jpg", file="photo-id", is_photo=True)
+        order["id"], BUYER, Receipt(title="перевод.jpg", file="photo-id", kind="photo")
     )
     check("чек заявляет оплату: статус «на проверке»", claimed and order["status"] == const.PAYMENT_CHECK)
     check("продавцу ушёл чек вместе с заявкой",
@@ -218,10 +230,10 @@ async def test_service(cfg, bot: FakeBot, svc: OrderService) -> None:
     check("у покупателя запросили UDID", any("Оплата получена" in t for t in bot.to(BUYER)))
 
     try:
-        await svc.submit_udid(order["id"], "123", BUYER)
-        check("короткий UDID отклонён", False)
+        await svc.submit_udid(order["id"], "мой номер телефона", BUYER)
+        check("UDID с чужими символами отклонён", False)
     except ServiceError:
-        check("короткий UDID отклонён", True)
+        check("UDID с чужими символами отклонён", True)
 
     order = await svc.submit_udid(order["id"], SPACED_UDID, BUYER)
     check("UDID сохранён", order["device_udid"] == udid_mod.TEST_UDID and order["status"] == const.UDID)
@@ -400,7 +412,7 @@ async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
     except ServiceError:
         check("неизвестное приложение отклонено", True)
 
-    await svc.submit_receipt(order["id"], BUYER, Receipt(title="чек.jpg", file="photo-id", is_photo=True))
+    await svc.submit_receipt(order["id"], BUYER, Receipt(title="чек.jpg", file="photo-id", kind="photo"))
     kept, _ = await svc.get_or_create_order(BUYER, "yota")
     check("заказ с заявленной оплатой не перенастраивается",
           kept["app_slug"] == "sber" and kept["status"] == const.PAYMENT_CHECK)
@@ -426,6 +438,14 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("bootstrap отдаёт каталог", len(data["catalog"]) == 15, str(len(data["catalog"])))
         check("цена в витрине", data["product"]["priceText"].startswith("3"))
         check("покупатель не продавец", data["user"]["isSeller"] is False)
+
+        developer = data["instruction"]["developerMode"]
+        check("в инструкции первым — режим разработчика",
+              developer["title"] == "Сначала включите режим разработчика" and len(developer["steps"]) == 4,
+              str(developer)[:200])
+        res = await client.get(developer["image"])
+        check("картинка режима разработчика отдаётся",
+              res.status == 200 and len(await res.read()) > 10_000, developer["image"])
 
         steps = data["instruction"]["steps"]
         check("шаблон инструкции отдаётся витрине", len(steps) == 10, str(len(steps)))
@@ -500,12 +520,25 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("чек отмечен в переписке заказа",
               any("Чек об оплате" in m["text"] for m in messages))
 
+        # Чек — любой файл до 15 МБ: формат не проверяется.
+        bot.files.clear()
         form = FormData()
-        form.add_field("file", b"MZ", filename="virus.exe", content_type="application/x-msdownload")
+        form.add_field("file", os.urandom(12 * 1024 * 1024), filename="чек.zip", content_type="application/zip")
         res = await client.post(
             "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
         )
-        check("чужой тип файла отклонён", res.status == 400)
+        check("любой формат чека принимается — архив 12 МБ", res.status == 200, str(res.status))
+        check("необычный формат уходит продавцу файлом",
+              any(cid == SELLER and kind == "document" for cid, kind, _cap in bot.files), str(bot.files))
+
+        form = FormData()
+        form.add_field("file", b"\x00" * (15 * 1024 * 1024 + 1), filename="big.mov", content_type="video/quicktime")
+        res = await client.post(
+            "/api/order/receipt?orderId=%d" % order["id"], headers=buyer_headers, data=form
+        )
+        answer = await res.json()
+        check("файл больше 15 МБ — отказ с объяснением",
+              res.status == 400 and "15 МБ" in answer.get("error", ""), str(answer))
 
         res = await client.post(
             "/api/order/receipt/link", headers=buyer_headers,
@@ -529,9 +562,13 @@ async def test_api(cfg, bot: FakeBot, svc: OrderService) -> None:
         check("продавцу виден полный UDID", "udid" in seller_view)
 
         res = await client.post(
-            "/api/order/udid/check", headers=buyer_headers, json={"udid": "4901542032375"}
+            "/api/order/udid/check", headers=buyer_headers, json={"udid": "49015420Ж32375"}
         )
-        check("проверка номера ловит ошибку", (await res.json())["valid"] is False)
+        check("проверка номера ловит ошибку в символах", (await res.json())["valid"] is False)
+        res = await client.post(
+            "/api/order/udid/check", headers=buyer_headers, json={"udid": MODERN_UDID}
+        )
+        check("проверка номера пропускает новый формат", (await res.json())["valid"] is True)
 
         res = await client.post(
             "/api/order/udid",
@@ -703,7 +740,7 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
     check("продавцу ушла полная карточка", any("Новый заказ" in t for t in bot.to(SELLER)))
 
     await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
-    await svc.submit_udid(order["id"], udid_mod.TEST_UDID, SUPPLIER_BUYER)
+    await svc.submit_udid(order["id"], MODERN_UDID, SUPPLIER_BUYER)
 
     app = build_app(cfg, bot, svc)
     client = TestClient(TestServer(app))
@@ -725,7 +762,8 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
             str(sorted(row)),
         )
         check("статус заказа виден", row["statusTitle"] == const.TITLES[const.UDID], row["statusTitle"])
-        check("UDID отдаётся целиком", row["udid"] == udid_mod.TEST_UDID)
+        check("UDID нового формата дошёл как есть — с дефисом и регистром",
+              row["udid"] == MODERN_UDID, row["udid"])
         check("покупатель виден", row["username"] == "petr" and row["firstName"] == "Пётр")
 
         res = await client.get("/api/supplier/orders", headers=buyer_headers)

@@ -49,6 +49,7 @@ from aiogram.methods import (  # noqa: E402
     SendDocument,
     SendMessage,
     SendPhoto,
+    SendVideo,
 )
 from aiogram.types import (  # noqa: E402
     CallbackQuery,
@@ -59,6 +60,7 @@ from aiogram.types import (  # noqa: E402
     PhotoSize,
     Update,
     User,
+    Video,
 )
 
 from app import const, db  # noqa: E402
@@ -190,6 +192,20 @@ def file_update(chat_id: int, *, photo: bool, name: str = "") -> Update:
             document=Document(file_id="receipt-doc", file_unique_id="r2", file_name=name),
             **common,
         )
+    counter["id"] += 1
+    return Update(update_id=counter["id"], message=message)
+
+
+def video_update(chat_id: int) -> Update:
+    """Покупатель прислал запись экрана — Telegram шлёт её видео, а не файлом."""
+    counter["id"] += 1
+    message = Message(
+        message_id=counter["id"],
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=chat_id, type="private"),
+        from_user=User(id=chat_id, is_bot=False, first_name="Тест", username="user%d" % chat_id),
+        video=Video(file_id="receipt-video", file_unique_id="v1", width=720, height=1280, duration=12),
+    )
     counter["id"] += 1
     return Update(update_id=counter["id"], message=message)
 
@@ -330,6 +346,13 @@ async def main() -> int:
     check("покупателю подтвердили второй чек", any("отправлен продавцу" in t for t in bot.texts_to(BUYER)))
 
     bot.reset()
+    await dp.feed_update(bot, video_update(BUYER))
+    check(
+        "чек видео (запись экрана) ушёл продавцу видео",
+        any(isinstance(m, SendVideo) and m.chat_id == SELLER and m.video == "receipt-video" for m in bot.calls),
+    )
+
+    bot.reset()
     await dp.feed_update(bot, callback_update(SELLER, "o:payno:%d" % order["id"]))
     order = await db.get_order(order["id"])
     check("продавец отклонил — заказ снова ждёт чек", order["status"] == const.NEW)
@@ -358,7 +381,8 @@ async def main() -> int:
     await dp.feed_update(bot, message_update(BUYER, "12345"))
     order = await db.get_order(order["id"])
     check("короткий текст не принят за номер", order["device_udid"] is None)
-    check("есть напоминание про 40 символов", any("40" in t for t in bot.texts_to(BUYER)))
+    check("есть подсказка, из чего состоит UDID",
+          any("латинские буквы A–F" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
 
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "2b6f0cc904d137be2e17 30235f5664094b831186"))
@@ -414,6 +438,10 @@ async def main() -> int:
           any("Инструкция по заказу" in t for t in bot.texts_to(BUYER)))
     check("в инструкции есть шаги",
           any("Введите свой UDID" in t for t in bot.texts_to(BUYER)))
+    instruction = next((t for t in bot.texts_to(BUYER) if "Инструкция по заказу" in t), "")
+    check("режим разработчика — первым, до ботов",
+          0 < instruction.find("режим разработчика") < instruction.find("Понадобятся два бота"),
+          instruction[:200])
 
     print("\nПереписка")
     bot.reset()
