@@ -62,8 +62,8 @@ from aiogram.methods import SendDocument  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, bundle, catalog, const, db, ipa as ipa_mod, udid as udid_mod  # noqa: E402
-from app.api import build_app  # noqa: E402
+from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, udid as udid_mod  # noqa: E402
+from app.api import build_app, order_public  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
 
@@ -135,7 +135,18 @@ def test_udid() -> None:
     check("длиннее 40 — отказ", udid_mod.validate("a" * 41)[0] is None)
     check("чужие символы отклоняются", udid_mod.validate("z" * 40)[0] is None)
     lookalike = MODERN_UDID.replace("E", "\u0415").replace("C", "\u0421")  # кириллические Е и С
-    check("кириллица вместо латиницы отклоняется", udid_mod.validate(lookalike)[0] is None)
+    check("кириллические Е и С становятся латинскими", udid_mod.validate(lookalike)[0] == MODERN_UDID)
+    lower = udid_mod.TEST_UDID.replace("e", "\u0435").replace("c", "\u0441").replace("b", "\u0432")
+    check("строчные а, в, с, е тоже", udid_mod.validate(lower)[0] == udid_mod.TEST_UDID)
+    check("кириллица заменяется и в длинном номере",
+          udid_mod.validate("\u0410\u0412\u0421\u0415" * 10)[0] == "ABCE" * 10)
+    check("номер с кириллицей в чате узнаётся как номер", udid_mod.looks_like_attempt(lookalike))
+    check("другие кириллические буквы отклоняются",
+          udid_mod.validate(MODERN_UDID.replace("E", "\u0416"))[0] is None)
+    for dash, name in (("\u2014", "длинное тире"), ("\u2013", "короткое тире"), ("\u2212", "минус")):
+        check("%s → дефис" % name, udid_mod.validate(MODERN_UDID.replace("-", dash))[0] == MODERN_UDID)
+    check("невидимые символы из буфера убираются",
+          udid_mod.validate("\ufeff" + MODERN_UDID.replace("-", "\u200b-"))[0] == MODERN_UDID)
     check("пустой — отказ", udid_mod.validate("  \n ")[0] is None)
     check("одни дефисы — отказ", udid_mod.validate("---")[0] is None)
     check("новый формат в чате узнаётся как номер", udid_mod.looks_like_attempt(MODERN_UDID))
@@ -369,18 +380,31 @@ async def test_close_and_reorder(cfg, bot: FakeBot, svc: OrderService) -> None:
     check("выполненный заказ не мешает новому", created and same["id"] != order["id"])
     await svc.cancel(same["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
 
+    bot.sent.clear()
     closed = await svc.cancel(order["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
-    check("выполненный заказ закрывается покупателем", closed["status"] == const.CANCELLED)
+    check("выполненный заказ закрывается покупателем", bool(closed["closed_at"]))
+    check("для продавца закрытый заказ остаётся выполненным", closed["status"] == const.DONE)
+    check("продавец узнаёт, что покупатель закрыл заказ",
+          any("Покупатель закрыл заказ" in t for t in bot.to(SELLER)))
+    check("витрина видит, что заказ закрыт", order_public(closed)["closed"])
+    labels = [b.text for row in keyboards.buyer_order_kb(cfg, closed).inline_keyboard for b in row]
+    check("у закрытого заказа в боте нет кнопки «Закрыть заказ»", "Закрыть заказ" not in labels, str(labels))
 
     try:
         await svc.cancel(order["id"], "user:%d" % BUYER, by_seller=False, actor_id=BUYER)
         check("повторное закрытие отклоняется", False)
-    except ServiceError:
-        check("повторное закрытие отклоняется", True)
+    except ServiceError as exc:
+        check("повторное закрытие отклоняется", "уже закрыт" in str(exc), str(exc))
 
     events = await db.list_events(order["id"], limit=5)
     check("в истории видно, что заказ закрыт, а не отменён",
-          any(ev["detail"] == "закрыт" for ev in events))
+          any(ev["type"] == "closed" for ev in events)
+          and not any(ev["type"] == "status:" + const.CANCELLED for ev in events))
+
+    # Закрытый заказ у покупателя последний — экран заказа уступает оформлению нового.
+    fresh, created = await svc.get_or_create_order(BUYER)
+    check("после закрытия — новый заказ", created and fresh["id"] != order["id"])
+    await svc.cancel(fresh["id"], "test", by_seller=True)
 
 
 async def test_app_orders(cfg, bot: FakeBot, svc: OrderService) -> None:
@@ -985,6 +1009,39 @@ async def test_seller_filters(cfg, bot: FakeBot, svc: OrderService) -> None:
         await client.close()
 
 
+async def test_migration(tmp: str) -> None:
+    print("\nМиграция базы")
+    import sqlite3
+
+    path = os.path.join(tmp, "old.sqlite3")
+    old = sqlite3.connect(path)
+    old.executescript(
+        """
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, user_id INTEGER NOT NULL,
+            status TEXT NOT NULL, price_rub INTEGER NOT NULL, payment_mode TEXT NOT NULL,
+            app_slug TEXT, payment_ref TEXT, device_udid TEXT, instruction TEXT, seller_note TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, paid_at TEXT, udid_at TEXT,
+            installed_at TEXT, done_at TEXT
+        );
+        INSERT INTO orders (code, user_id, status, price_rub, payment_mode, created_at, updated_at)
+        VALUES ('NP-0001', 1, 'done', 3000, 'manual', '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00');
+        """
+    )
+    old.commit()
+    old.close()
+
+    await db.init(path)
+    columns = {row["name"] for row in await db._fetchall("PRAGMA table_info(orders)")}
+    check("в старую базу добавлена колонка closed_at", "closed_at" in columns)
+    order = await db.get_order(1)
+    check("старый выполненный заказ не считается закрытым", order and order["closed_at"] is None)
+    await db.close()
+    await db.init(path)
+    check("повторный запуск миграции не падает", True)
+    await db.close()
+
+
 def bump(path: pathlib.Path, seconds: int) -> None:
     """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
     moment = time.time() + seconds
@@ -1160,6 +1217,7 @@ async def main() -> int:
     await test_seller_filters(cfg, bot, svc)
 
     await db.close()
+    await test_migration(tmp)
 
     print("")
     if failures:

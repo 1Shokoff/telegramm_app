@@ -332,6 +332,8 @@ async def main() -> int:
     )
     check("покупателю сказали, что заказ на проверке",
           any("отправлен на проверку оплаты" in t for t in bot.texts_to(BUYER)))
+    check("и что продавец может ответить не сразу",
+          any("может ответить не сразу" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER))[:300])
 
     bot.reset()
     await dp.feed_update(bot, file_update(BUYER, photo=False, name="chek.pdf"))
@@ -385,10 +387,12 @@ async def main() -> int:
           any("латинские буквы A–F" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
 
     bot.reset()
-    await dp.feed_update(bot, message_update(BUYER, "2b6f0cc904d137be2e17 30235f5664094b831186"))
+    cyrillic = "2b6f0cc904d137be2e17 30235f5664094b831186".replace("e", "\u0435").replace("c", "\u0441")
+    await dp.feed_update(bot, message_update(BUYER, cyrillic))
     order = await db.get_order(order["id"])
-    check("UDID принят", order["device_udid"] == "2b6f0cc904d137be2e1730235f5664094b831186"
-          and order["status"] == const.UDID)
+    check("UDID с кириллическими е и с принят латиницей",
+          order["device_udid"] == "2b6f0cc904d137be2e1730235f5664094b831186"
+          and order["status"] == const.UDID, str(order["device_udid"]))
     check("продавец получил UDID", any("Получен UDID" in t for t in bot.texts_to(SELLER)))
 
     print("\nПоставщик")
@@ -481,6 +485,15 @@ async def main() -> int:
     await dp.feed_update(bot, callback_update(BUYER, "nt:%s" % const.NOTIFY_STATUS))
     prefs = await db.get_notify_prefs(BUYER)
     check("повторное нажатие включает обратно", prefs.get(const.NOTIFY_STATUS) is True)
+
+    print("\nЗакрытие выполненного заказа")
+    bot.reset()
+    await dp.feed_update(bot, callback_update(BUYER, "o:cancel:%d" % order["id"]))
+    order = await db.get_order(order["id"])
+    check("покупатель закрыл заказ кнопкой в боте", bool(order["closed_at"]))
+    check("у продавца заказ остался выполненным", order["status"] == const.DONE)
+    check("покупателю написали, что заказ закрыт, а не отменён",
+          any("закрыт" in t and "отменён" not in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
 
     print("\nУдаление данных")
     bot.reset()

@@ -370,7 +370,11 @@ async def cb_cancel(call: CallbackQuery, service: OrderService) -> None:
     except ServiceError as exc:
         await call.answer(str(exc), show_alert=True)
         return
-    await call.message.answer("Заказ <b>%s</b> отменён." % texts.e(order["code"]))
+    if order["status"] == const.DONE:
+        reply = "Заказ <b>%s</b> закрыт. Инструкция осталась в этом чате." % texts.e(order["code"])
+    else:
+        reply = "Заказ <b>%s</b> отменён." % texts.e(order["code"])
+    await call.message.answer(reply)
     await call.answer()
 
 
@@ -428,7 +432,8 @@ async def _receipt(message: Message, cfg: Config, service: OrderService, receipt
     if claimed:
         reply = (
             "Чек получен — заказ <b>%s</b> отправлен на проверку оплаты.\n"
-            "Как только продавец подтвердит платёж, попросим UDID." % texts.e(updated["code"])
+            "Как только продавец подтвердит платёж, попросим UDID.\n\n<i>%s</i>"
+            % (texts.e(updated["code"]), texts.e(texts.HINTS[const.PAYMENT_CHECK]))
         )
     else:
         reply = "Чек по заказу <b>%s</b> отправлен продавцу." % texts.e(updated["code"])

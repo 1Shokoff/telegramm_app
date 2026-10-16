@@ -18,6 +18,8 @@ const state = {
   udidError: null,
   agreeTerms: false,
   agreeUdid: false,
+  // Покупатель нажал «Закрыть заказ» и видит вопрос «Точно закрыть?».
+  confirmClose: false,
   busy: false,
   // prefs — сортировка и фильтры каждой подгруппы, читаются из памяти устройства при первом обращении.
   seller: {
@@ -243,7 +245,7 @@ function viewCheckout() {
       '<button class="btn btn-primary" id="buyBtn" data-action="buy"' + (state.agreeTerms ? '' : ' disabled') + '>' +
         'Оформить заказ и перейти к оплате</button>' +
     '</div>' +
-    (state.newOrder && b.order
+    (state.newOrder && hasOrderScreen(b.order)
       ? '<button class="btn btn-ghost btn-sm" data-action="back-to-order">Вернуться к заказу ' +
         esc(b.order.code) + '</button>'
       : '')
@@ -286,13 +288,14 @@ function requisiteRow(row) {
 
 /* Ещё один чек к заказу, который уже на проверке: например, PDF вдогонку к скриншоту. */
 function receiptBlock() {
+  // Поле выбора файла — в конце: между двумя кнопками оно съедало отступ .btn + .btn.
   return (
-    '<input type="file" id="receiptFile" multiple hidden>' +
     '<button class="btn btn-secondary" data-action="receipt-pick">🧾 Прикрепить ещё чек</button>' +
     '<div class="upload-bar" id="uploadBar" hidden><span></span></div>' +
     '<div class="cta-note">Скриншот перевода или чек из банка — продавец увидит его ' +
       'в заказе. Можно выбрать несколько файлов, вместе до 15 МБ. Ссылку на документ ' +
-      'можно прислать сообщением в чат.</div>'
+      'можно прислать сообщением в чат.</div>' +
+    '<input type="file" id="receiptFile" multiple hidden>'
   );
 }
 
@@ -399,6 +402,8 @@ function viewWaitingPayment(order) {
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) +
       '. Продавец подтвердит поступление — после этого попросим UDID.</p>' +
     '<div class="card">' +
+      // Подсказка общая с ботом: продавец проверяет вручную и может ответить не сразу.
+      '<div class="notice notice-top">' + esc(order.hint) + '</div>' +
       '<button class="btn btn-secondary" data-action="order-refresh">Обновить статус</button>' +
       (order.paymentMode === 'manual' ? receiptBlock() : '') +
     '</div>' +
@@ -625,14 +630,6 @@ function startCheckout(slug) {
   render();
 }
 
-function confirmAction(message, onYes) {
-  if (tg && tg.showConfirm) {
-    tg.showConfirm(message, (ok) => { if (ok) onYes(); });
-    return;
-  }
-  if (window.confirm(message)) onYes();
-}
-
 function chatButton(label) {
   const unread = state.boot && state.boot.unread ? state.boot.unread : 0;
   const badge = unread ? ' <span class="count-badge">' + unread + '</span>' : '';
@@ -772,21 +769,44 @@ function viewOrderStatus(order) {
     '</div>' +
     (order.instructionReady ? instructionBlock(order) : '') +
     (order.status === 'done'
-      ? '<button class="btn btn-primary" data-action="new-order">Оформить новый заказ</button>'
+      ? '<button class="btn btn-primary" data-action="new-order">Оформить новый заказ</button>' +
+        closeOrderBlock(order)
       : '') +
     chatButton('Чат с продавцом') +
-    (order.status === 'done'
-      ? '<button class="btn btn-danger btn-sm" data-action="order-close">Закрыть заказ</button>'
-      : '') +
     '<button class="btn btn-ghost" data-action="order-help">Помощь по заказу</button>'
   );
+}
+
+/* Вопрос «Закрыть заказ?» задаём прямо на странице. Системное окно Telegram
+   (showConfirm) есть не во всех клиентах: где его нет, кнопка молчала
+   и заказ было не закрыть. */
+function closeOrderBlock(order) {
+  if (!state.confirmClose) {
+    return '<button class="btn btn-secondary" data-action="order-close">Закрыть заказ</button>';
+  }
+  return (
+    '<div class="card confirm-box">' +
+      '<div class="confirm-title">Закрыть заказ ' + esc(order.code) + '?</div>' +
+      '<div class="confirm-text">Он пропадёт с этого экрана, а инструкция останется в чате бота.</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn btn-secondary" data-action="order-close-no">Оставить</button>' +
+        '<button class="btn btn-danger" data-action="order-close-yes">Закрыть</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+/* Есть ли у заказа свой экран: открытый или выполненный, пока покупатель
+   его не закрыл. Отменённый и закрытый уступают место оформлению нового. */
+function hasOrderScreen(order) {
+  return Boolean(order) && !order.closed && (order.isOpen || order.status === 'done');
 }
 
 function viewOrder() {
   const order = state.boot.order;
   // Готовый заказ не должен закрывать дорогу новому.
   if (state.newOrder) return viewCheckout();
-  if (!order || (!order.isOpen && order.status !== 'done')) return viewCheckout();
+  if (!hasOrderScreen(order)) return viewCheckout();
   if (order.status === 'new') return viewPayment(order);
   if (order.status === 'payment_check') return viewWaitingPayment(order);
   if (order.status === 'paid') return viewUdid(order);
@@ -1552,6 +1572,20 @@ function bindPager(el) {
   }, true);
 }
 
+/* То же, что udid.normalize на сервере: пробелы и невидимые символы долой,
+   кириллические А, В, С, Е — на латинские, тире и минус — на дефис.
+   Глазом эти символы не отличить, поэтому исправляем молча. */
+const UDID_LOOKALIKES = {
+  'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'а': 'a', 'в': 'b', 'с': 'c', 'е': 'e',
+};
+
+function normalizeUdid(value) {
+  return value
+    .replace(/[\s​-‍⁠﻿]+/g, '')
+    .replace(/[АВСЕавсе]/g, (ch) => UDID_LOOKALIKES[ch])
+    .replace(/[‐-―−﹣－]/g, '-');
+}
+
 function bindInputs() {
   document.querySelectorAll('.filters, .stepper').forEach((el) => bindScrollX(el));
   document.querySelectorAll('.instr-steps').forEach((el) => bindPager(el));
@@ -1559,9 +1593,9 @@ function bindInputs() {
   const udid = document.getElementById('udidInput');
   if (udid) {
     udid.addEventListener('input', () => {
-      // Убираем только пробелы и переносы: дефис и регистр — часть номера,
-      // а лишние символы покажет проверка на сервере, а не молча съест поле.
-      const clean = udid.value.replace(/\s+/g, '').slice(0, 40);
+      // Дефис и регистр — часть номера, их не трогаем, а лишние символы
+      // покажет проверка на сервере, а не молча съест поле.
+      const clean = normalizeUdid(udid.value).slice(0, 40);
       if (udid.value !== clean) udid.value = clean;
       state.udid = clean;
       state.udidChecked = null;
@@ -1976,19 +2010,27 @@ const actions = {
     else window.open('https://udid.tech', '_blank');
   },
 
-  'order-close': () => confirmAction(
-    'Закрыть заказ? Он пропадёт с экрана, а инструкция останется в чате бота.',
-    () => guard(async () => {
-      const data = await api('/api/order/cancel', {
-        method: 'POST',
-        body: { orderId: state.boot.order.id },
-      });
-      state.boot.order = data.order;
-      state.newOrder = false;
-      toast('Заказ закрыт');
-      render();
-    })
-  ),
+  'order-close': () => {
+    state.confirmClose = true;
+    render();
+    // Вопрос появляется внизу страницы — его кнопки не должны прятаться под панелью вкладок.
+    const box = document.querySelector('.confirm-box');
+    if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+
+  'order-close-no': () => { state.confirmClose = false; render(); },
+
+  'order-close-yes': () => guard(async () => {
+    const data = await api('/api/order/cancel', {
+      method: 'POST',
+      body: { orderId: state.boot.order.id },
+    });
+    state.boot.order = data.order;
+    state.newOrder = false;
+    state.confirmClose = false;
+    toast('Заказ закрыт');
+    render();
+  }),
 
   'order-cancel': () => guard(async () => {
     const data = await api('/api/order/cancel', { method: 'POST', body: { orderId: state.boot.order.id } });

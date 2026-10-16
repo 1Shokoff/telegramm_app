@@ -187,6 +187,8 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "createdAt": order["created_at"],
         "updatedAt": order["updated_at"],
         "isOpen": order["status"] in const.OPEN_STATUSES,
+        # Выполненный заказ, который покупатель убрал с экрана.
+        "closed": bool(order.get("closed_at")),
     }
     if full:
         data["udid"] = order.get("device_udid")

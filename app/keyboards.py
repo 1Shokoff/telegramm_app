@@ -87,9 +87,10 @@ def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton(text="Оформить новый заказ", callback_data="nav:buy")]
         )
-        rows.append(
-            [InlineKeyboardButton(text="Закрыть заказ", callback_data=cb("cancel", order["id"]))]
-        )
+        if not order.get("closed_at"):
+            rows.append(
+                [InlineKeyboardButton(text="Закрыть заказ", callback_data=cb("cancel", order["id"]))]
+            )
     rows.append([InlineKeyboardButton(text="💬 Написать продавцу", callback_data="nav:chat")])
     rows.append(
         [

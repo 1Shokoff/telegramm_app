@@ -411,6 +411,16 @@ class OrderService:
         if not by_seller and order["status"] not in (const.NEW, const.PAYMENT_CHECK, const.DONE):
             raise ServiceError("Заказ в работе отменяет продавец — напишите ему в переписке.")
 
+        if not by_seller and order["status"] == const.DONE:
+            # Услуга оказана и оплачена: для продавца заказ остаётся выполненным,
+            # покупатель лишь убирает его со своего экрана.
+            if order.get("closed_at"):
+                raise ServiceError("Заказ уже закрыт.")
+            closed = await db.close_order(order_id, actor)
+            assert closed
+            await self.push_order_to_sellers(closed, "🗂 <b>Покупатель закрыл заказ</b>", const.NOTIFY_STATUS)
+            return closed
+
         was_done = order["status"] == const.DONE
         updated = await db.set_status(
             order_id, const.CANCELLED, actor, "закрыт" if was_done else "отменён"
@@ -425,11 +435,7 @@ class OrderService:
                 order_id=order_id,
             )
         else:
-            await self.push_order_to_sellers(
-                updated,
-                "🗂 <b>Покупатель закрыл заказ</b>" if was_done else "🚫 <b>Покупатель отменил заказ</b>",
-                const.NOTIFY_STATUS,
-            )
+            await self.push_order_to_sellers(updated, "🚫 <b>Покупатель отменил заказ</b>", const.NOTIFY_STATUS)
         return updated
 
     # ------------------------------------------------------------ переписка

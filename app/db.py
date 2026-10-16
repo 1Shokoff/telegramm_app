@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS orders (
     paid_at      TEXT,
     udid_at      TEXT,
     installed_at TEXT,
-    done_at      TEXT
+    done_at      TEXT,
+    -- Покупатель убрал выполненный заказ с экрана; для продавца он остаётся выполненным.
+    closed_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user   ON orders(user_id);
@@ -126,6 +128,9 @@ async def _migrate() -> None:
     if "app_slug" not in columns:
         await conn().execute("ALTER TABLE orders ADD COLUMN app_slug TEXT")
         log.info("Миграция: добавлена колонка orders.app_slug")
+    if "closed_at" not in columns:
+        await conn().execute("ALTER TABLE orders ADD COLUMN closed_at TEXT")
+        log.info("Миграция: добавлена колонка orders.closed_at")
     await conn().commit()
 
 
@@ -387,6 +392,17 @@ async def set_status(
     await conn().execute(sql, args)
     await conn().commit()
     await add_event(order_id, actor, "status:" + status, detail)
+    return await get_order(order_id)
+
+
+async def close_order(order_id: int, actor: str) -> dict | None:
+    """Покупатель закрыл выполненный заказ: статус не меняется, заказ уходит с его экрана."""
+    ts = now()
+    await conn().execute(
+        "UPDATE orders SET closed_at = ?, updated_at = ? WHERE id = ?", (ts, ts, order_id)
+    )
+    await conn().commit()
+    await add_event(order_id, actor, "closed", "покупатель закрыл выполненный заказ")
     return await get_order(order_id)
 
 

@@ -713,6 +713,12 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
   margin: 14px 0;
 }
 .notice.warn { color: var(--warn); }
+.notice-top { margin-top: 0; }
+
+/* «Закрыть заказ?» — вопрос на месте кнопки вместо системного окна Telegram. */
+.confirm-box { margin-top: 10px; }
+.confirm-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.confirm-text { color: var(--muted); font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
 
 pre.instruction {
   white-space: pre-wrap;
