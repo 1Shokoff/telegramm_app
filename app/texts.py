@@ -55,6 +55,15 @@ def user_line(order: dict) -> str:
     return "%s%s · <code>%s</code>" % (name, tail, order["user_id"])
 
 
+def buyer_label(order: dict, limit: int = 20) -> str:
+    """Покупатель для подписи кнопки — обычный текст, без HTML: @юзернейм, иначе имя."""
+    username = order.get("username")
+    if username:
+        return "@" + username
+    name = str(order.get("first_name") or order["user_id"]).strip()
+    return name if len(name) <= limit else name[: limit - 1] + "…"
+
+
 def user_ref(order: dict) -> str:
     """Покупатель одной строкой: @юзернейм, иначе имя, иначе Telegram ID."""
     username = order.get("username")

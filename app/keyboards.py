@@ -107,6 +107,13 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
     status = order["status"]
     rows: list[list[InlineKeyboardButton]] = []
 
+    # UDID кладёт в буфер обмена сам Telegram — как у поставщика.
+    udid = order.get("device_udid")
+    if udid:
+        rows.append(
+            [InlineKeyboardButton(text="📋 Скопировать UDID", copy_text=CopyTextButton(text=udid))]
+        )
+
     if status in (const.NEW, const.PAYMENT_CHECK):
         rows.append(
             [

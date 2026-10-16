@@ -56,7 +56,9 @@ async def cmd_orders(message: Message, command: CommandObject) -> None:
     rows = [
         [
             InlineKeyboardButton(
-                text="%s · %s" % (o["code"], const.TITLES.get(o["status"], o["status"])),
+                # По одному номеру не понять, чей заказ, — рядом покупатель.
+                text="%s · %s · %s"
+                % (o["code"], texts.buyer_label(o), const.TITLES.get(o["status"], o["status"])),
                 callback_data=keyboards.cb("card", o["id"]),
             )
         ]

@@ -48,7 +48,7 @@ async def cmd_udids(message: Message) -> None:
     rows = [
         [
             InlineKeyboardButton(
-                text="%s · %s" % (o["code"], texts.when(o["created_at"])),
+                text="%s · %s · %s" % (o["code"], texts.buyer_label(o), texts.when(o["created_at"])),
                 callback_data=keyboards.cb("ucard", o["id"]),
             )
         ]

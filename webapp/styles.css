@@ -228,6 +228,15 @@ p { margin: 0 0 12px; }
   word-break: break-all;
   min-width: 0;
 }
+/* Значение-кнопка: нажатие на UDID копирует его. Выглядит как текст, иконка подсказывает. */
+.row .value.copyable {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; cursor: pointer; text-align: right; line-height: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.row .value.copyable svg { vertical-align: -3px; margin-left: 4px; color: var(--muted); }
+.row .value.copyable:active { color: var(--accent); }
+.row .value.copyable:active svg { color: var(--accent); }
 
 .product { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .product .app-icon { width: 46px; height: 46px; border-radius: 13px; font-size: 20px; }

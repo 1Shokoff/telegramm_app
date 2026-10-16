@@ -394,6 +394,8 @@ async def main() -> int:
           order["device_udid"] == "2b6f0cc904d137be2e1730235f5664094b831186"
           and order["status"] == const.UDID, str(order["device_udid"]))
     check("продавец получил UDID", any("Получен UDID" in t for t in bot.texts_to(SELLER)))
+    check("у продавца кнопка копирует UDID",
+          any(b[2] == order["device_udid"] for b in buttons_to(bot, SELLER)), str(buttons_to(bot, SELLER)))
 
     print("\nПоставщик")
     bot.reset()
@@ -417,6 +419,9 @@ async def main() -> int:
           any("Заказы с UDID" in t for t in bot.texts_to(SUPPLIER)), str(bot.texts_to(SUPPLIER)))
     check("из списка открывается карточка",
           any(b[1] == "o:ucard:%d" % order["id"] for b in buttons_to(bot, SUPPLIER)))
+    check("в списке UDID виден покупатель",
+          any(b[1] == "o:ucard:%d" % order["id"] and "@user%d" % BUYER in b[0] for b in buttons_to(bot, SUPPLIER)),
+          str(buttons_to(bot, SUPPLIER)))
 
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/udids"))
@@ -469,6 +474,10 @@ async def main() -> int:
     bot.reset()
     await dp.feed_update(bot, message_update(SELLER, "/orders all"))
     check("/orders работает", any("Заказы" in t or "заказы" in t for t in bot.texts_to(SELLER)))
+    mine = [b[0] for b in buttons_to(bot, SELLER) if b[1] == "o:card:%d" % order["id"]]
+    check("в /orders рядом с номером покупатель и статус",
+          bool(mine) and order["code"] in mine[0] and "@user%d" % BUYER in mine[0]
+          and const.TITLES[order["status"]] in mine[0], str(mine))
     await dp.feed_update(bot, message_update(SELLER, "/find %s" % order["code"]))
     check("/find находит заказ", any(order["code"] in t for t in bot.texts_to(SELLER)))
     await dp.feed_update(bot, message_update(SELLER, "/stats"))

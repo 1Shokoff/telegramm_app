@@ -1008,6 +1008,16 @@ function sellerActions(o) {
   return '<div class="btn-row mt">' + buttons.join('') + '</div>';
 }
 
+/* UDID в карточке заказа копируется нажатием на сам номер: так его
+   быстрее всего переложить в бота регистрации устройств. */
+function udidValue(udid, key) {
+  if (!udid) return '<span class="value mono">—</span>';
+  return (
+    '<button type="button" class="value mono copyable" data-action="copy:' + key + '" ' +
+      'aria-label="Скопировать UDID">' + esc(udid) + ' ' + copyIcon() + '</button>'
+  );
+}
+
 function viewSellerOrder(o) {
   return (
     '<button class="backlink" data-action="seller-back">← Все заказы</button>' +
@@ -1018,7 +1028,7 @@ function viewSellerOrder(o) {
         esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
       '<div class="row"><span class="label">Telegram ID</span><span class="value mono">' + esc(o.userId) + '</span></div>' +
       '<div class="row"><span class="label">Сумма</span><span class="value">' + esc(o.priceText) + '</span></div>' +
-      '<div class="row"><span class="label">UDID</span><span class="value mono">' + esc(o.udid || '—') + '</span></div>' +
+      '<div class="row"><span class="label">UDID</span>' + udidValue(o.udid, 'seller-udid') + '</div>' +
       '<div class="row"><span class="label">Создан</span><span class="value">' + esc(dateOf(o.createdAt)) + '</span></div>' +
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
       sellerActions(o) +
@@ -1302,8 +1312,7 @@ function viewSupplierOrder(o) {
         esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
       '<div class="row"><span class="label">Создан</span><span class="value">' +
         esc(dateOf(o.createdAt)) + '</span></div>' +
-      '<div class="row"><span class="label">UDID</span><span class="value mono">' +
-        esc(o.udid || '—') + '</span></div>' +
+      '<div class="row"><span class="label">UDID</span>' + udidValue(o.udid, 'udid') + '</div>' +
       (o.udid
         ? '<div class="mt"><button class="btn btn-primary" data-action="copy:udid">' +
           'Скопировать UDID</button></div>'
@@ -1730,6 +1739,9 @@ function copyValue(key) {
     text = shown.replace(/[^\d.,]/g, '') || shown;
   } else if (key === 'udid') {
     const current = state.supplier.current;
+    text = current && current.udid;
+  } else if (key === 'seller-udid') {
+    const current = state.seller.current;
     text = current && current.udid;
   } else {
     const row = rows.find((r) => r.key === key);
