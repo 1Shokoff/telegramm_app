@@ -71,8 +71,8 @@ def shell(cfg: Config, title: str, body: str, version: str = "") -> str:
     ) % (_e(title), suffix, _e(title), body, footer(cfg))
 
 
-def document_page(key: str, cfg: Config, version: str = "") -> str | None:
-    found = legal.document(key, cfg)
+def document_page(key: str, cfg: Config, version: str = "", bot_username: str = "") -> str | None:
+    found = legal.document(key, cfg, bot_username)
     if not found:
         return None
     title, html = found

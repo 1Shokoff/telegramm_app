@@ -344,7 +344,7 @@ async def public_bootstrap(request: web.Request) -> web.Response:
 async def api_doc(request: web.Request) -> web.Response:
     """Текст документа для витрины — открывается внутри приложения."""
     key = request.match_info["key"]
-    found = legal.document(key, cfg_of(request))
+    found = legal.document(key, cfg_of(request), request.app.get("bot_username", ""))
     if not found:
         raise ApiError("Документ не найден", status=404)
     title, html = found
@@ -815,7 +815,9 @@ async def docs_index(request: web.Request) -> web.Response:
 
 @routes.get("/docs/{key}")
 async def docs_page(request: web.Request) -> web.Response:
-    html = pages.document_page(request.match_info["key"], cfg_of(request), asset_version())
+    html = pages.document_page(
+        request.match_info["key"], cfg_of(request), asset_version(), request.app.get("bot_username", "")
+    )
     if html is None:
         raise web.HTTPNotFound(text="Документ не найден", content_type="text/plain")
     return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-cache"})

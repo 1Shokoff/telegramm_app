@@ -44,7 +44,9 @@ def _missing(what: str) -> str:
     return "[укажите %s]" % what
 
 
-def _tokens(cfg: Config, updated: str) -> dict[str, str]:
+def _tokens(cfg: Config, updated: str, bot_username: str = "") -> dict[str, str]:
+    # Имя бота Telegram сообщает при запуске; BOT_USERNAME из .env — запасной вариант.
+    bot = bot_username or cfg.bot_username
     return {
         "legal_name": cfg.legal_name or _missing("наименование продавца"),
         "inn": cfg.legal_inn or _missing("ИНН"),
@@ -52,6 +54,7 @@ def _tokens(cfg: Config, updated: str) -> dict[str, str]:
         "email": cfg.contact_email or _missing("почту"),
         "phone": cfg.contact_phone or _missing("телефон"),
         "support": ("@" + cfg.support_username) if cfg.support_username else _missing("аккаунт Telegram"),
+        "bot_link": ("@" + bot) if bot else _missing("бота в Telegram"),
         "price": "%s ₽" % "{:,}".format(cfg.price_rub).replace(",", " "),
         "site": cfg.webapp_url or _missing("адрес сайта"),
         "updated": updated,
@@ -89,11 +92,11 @@ def to_html(text: str) -> str:
     return "\n".join(out)
 
 
-def document(key: str, cfg: Config) -> tuple[str, str] | None:
+def document(key: str, cfg: Config, bot_username: str = "") -> tuple[str, str] | None:
     """Заголовок и готовый HTML документа; None — текста нет."""
     if not exists(key):
         return None
     path = path_of(key)
     raw = path.read_text(encoding="utf-8")
     updated = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%d.%m.%Y")
-    return TITLES[key], to_html(_fill(raw, _tokens(cfg, updated)))
+    return TITLES[key], to_html(_fill(raw, _tokens(cfg, updated, bot_username)))

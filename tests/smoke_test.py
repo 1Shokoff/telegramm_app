@@ -62,7 +62,7 @@ from aiogram.methods import SendDocument  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, udid as udid_mod  # noqa: E402
+from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, udid as udid_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
@@ -119,6 +119,19 @@ def make_init_data(user_id: int, name: str = "Тест") -> str:
     secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
     payload["hash"] = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
     return urlencode(payload)
+
+
+def test_documents(cfg) -> None:
+    """Документы правит владелец — проверяем только, что все подстановки известны программе."""
+    print("\nДокументы")
+    for key, title, _hint in const.DOCUMENTS:
+        found = legal.document(key, cfg, "iApkibot")
+        check("документ «%s» есть" % title, found is not None)
+        if found:
+            _title, html = found
+            check("в «%s» нет незаполненных {{…}}" % title, "{{" not in html and "}}" not in html)
+    _title, html = legal.document("offer", cfg, "iApkibot")
+    check("{{bot_link}} — это @ и имя бота", "@iApkibot" in html)
 
 
 def test_udid() -> None:
@@ -1200,6 +1213,7 @@ async def main() -> int:
     svc = OrderService(bot, cfg)
 
     test_udid()
+    test_documents(cfg)
     test_auth()
     await test_service(cfg, bot, svc)
     await test_api(cfg, bot, svc)
