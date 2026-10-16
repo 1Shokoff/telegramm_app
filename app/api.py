@@ -189,6 +189,7 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "isOpen": order["status"] in const.OPEN_STATUSES,
         # Выполненный заказ, который покупатель убрал с экрана.
         "closed": bool(order.get("closed_at")),
+        "isTest": bool(order.get("is_test")),
     }
     if full:
         data["udid"] = order.get("device_udid")
@@ -213,6 +214,7 @@ def supplier_order_public(order: dict) -> dict:
         "username": order.get("username"),
         "createdAt": order["created_at"],
         "udid": order.get("device_udid"),
+        "isTest": bool(order.get("is_test")),
     }
 
 
@@ -295,7 +297,7 @@ async def bootstrap(request: web.Request) -> web.Response:
             "order": order_public(order),
             "unread": await db.unread_count(order["id"], db.BUYER) if order else 0,
             "sellerUnread": (
-                sum((await db.unread_by_order(db.SELLER)).values())
+                sum((await db.unread_by_order(db.SELLER, skip_test=True)).values())
                 if cfg.is_seller(user.id)
                 else 0
             ),
@@ -665,6 +667,8 @@ def seller_filters(query) -> dict:
         out["unread_only"] = True
     if query.get("udid") in ("yes", "no"):
         out["has_udid"] = query.get("udid") == "yes"
+    if query.get("test") == "hide":
+        out["hide_test"] = True
     return out
 
 
@@ -691,6 +695,8 @@ async def seller_orders(request: web.Request) -> web.Response:
     total = await db.count_orders(**scope)
     counts = await db.status_counts()
     unread = await db.unread_by_order(db.SELLER)
+    # Общий счётчик — без тестовых заказов, как и счётчики подгрупп.
+    unread_real = await db.unread_by_order(db.SELLER, skip_test=True)
 
     payload = []
     for order in orders:
@@ -705,7 +711,7 @@ async def seller_orders(request: web.Request) -> web.Response:
             "total": total,
             "counts": counts,
             "titles": const.TITLES,
-            "unreadTotal": sum(unread.values()),
+            "unreadTotal": sum(unread_real.values()),
         }
     )
 

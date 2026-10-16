@@ -724,6 +724,16 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 .notice.warn { color: var(--warn); }
 .notice-top { margin-top: 0; }
 
+/* Пометка тестового заказа (TEST_IDS) в списках и карточке. */
+.test-tag {
+  display: inline-block; vertical-align: middle;
+  margin-left: 6px; padding: 1px 7px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+h2 .test-tag { font-size: 12px; }
+
 /* «Закрыть заказ?» — вопрос на месте кнопки вместо системного окна Telegram. */
 .confirm-box { margin-top: 10px; }
 .confirm-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }

@@ -62,7 +62,7 @@ from aiogram.methods import SendDocument  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, udid as udid_mod  # noqa: E402
+from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, texts, udid as udid_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
@@ -835,7 +835,7 @@ async def test_supplier(cfg, bot: FakeBot, svc: OrderService) -> None:
             "в заказе только разрешённые поля",
             set(row) == {
                 "id", "code", "status", "statusTitle",
-                "firstName", "username", "createdAt", "udid",
+                "firstName", "username", "createdAt", "udid", "isTest",
             },
             str(sorted(row)),
         )
@@ -1047,12 +1047,80 @@ async def test_migration(tmp: str) -> None:
     await db.init(path)
     columns = {row["name"] for row in await db._fetchall("PRAGMA table_info(orders)")}
     check("в старую базу добавлена колонка closed_at", "closed_at" in columns)
+    check("и колонка is_test", "is_test" in columns)
     order = await db.get_order(1)
     check("старый выполненный заказ не считается закрытым", order and order["closed_at"] is None)
     await db.close()
     await db.init(path)
     check("повторный запуск миграции не падает", True)
     await db.close()
+
+
+async def test_test_orders(cfg) -> None:
+    """Заказы тестировщиков из TEST_IDS не шумят у продавцов и поставщиков."""
+    print("\nТестовые заказы")
+    tester = 444  # тестировщик без роли
+    cfg = replace(cfg, test_ids=(tester, SUPPLIER))
+    bot = FakeBot()
+    svc = OrderService(bot, cfg)
+    for uid, name in ((tester, "Тестер"), (SUPPLIER, "Поставщик"), (BUYER, "Покупатель")):
+        await db.upsert_user(uid, "u%d" % uid, name)
+
+    order, _ = await svc.get_or_create_order(tester)
+    check("заказ тестировщика помечен тестовым", order["is_test"] == 1)
+    check("продавцу о тестовом заказе не пишем", not bot.to(SELLER), str(bot.to(SELLER))[:200])
+    check("поставщику тоже", not bot.to(SUPPLIER), str(bot.to(SUPPLIER))[:200])
+
+    await svc.submit_receipt(order["id"], tester, Receipt(title="чек.pdf", file="doc-1"))
+    check("чек по тестовому заказу продавцу не уходит", not [f for f in bot.files if f[0] == SELLER])
+    await svc.post_message(order["id"], "Проверка переписки", tester, from_seller=False)
+    check("сообщение покупателя-тестировщика продавцу не уходит", not bot.to(SELLER))
+    order = await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
+    check("покупателю-тестировщику всё приходит как обычно", bool(bot.to(tester)))
+
+    # Поставщик сам тестирует: свою сторону он видит, с пометкой; продавец — нет.
+    bot.sent.clear()
+    own, _ = await svc.get_or_create_order(SUPPLIER)
+    check("заказ поставщика из TEST_IDS — тестовый", own["is_test"] == 1)
+    mine = bot.to(SUPPLIER)
+    check("тестировщик-поставщик получает уведомление поставщика",
+          any("Заказ №" in t for t in mine), str(mine)[:200])
+    check("и оно помечено «Тестовый заказ»", all(t.startswith(texts.TEST_MARK) for t in mine if "Заказ №" in t))
+    check("продавец о нём не знает", not bot.to(SELLER))
+
+    bot.sent.clear()
+    real, _ = await svc.get_or_create_order(BUYER)
+    check("заказ обычного покупателя — настоящий", real["is_test"] == 0)
+    check("о настоящем заказе продавцу пишем, без пометки",
+          any("Новый заказ" in t and texts.TEST_MARK not in t for t in bot.to(SELLER)))
+    check("и поставщику", any("Заказ №" in t for t in bot.to(SUPPLIER)))
+
+    counts = await db.status_counts()
+    check("счётчики — только настоящие заказы", sum(counts.values()) == 1, str(counts))
+    check("тестовые считаются отдельно", await db.count_test_orders() == 2)
+    check("в /orders тестовый помечен 🧪", texts.list_label(order, "x").startswith("🧪 "))
+    check("настоящий — без пометки", not texts.list_label(real, "x").startswith("🧪"))
+
+    app = build_app(cfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    seller = {"X-Init-Data": make_init_data(SELLER, "Продавец")}
+    try:
+        res = await client.get("/api/seller/orders", headers=seller, params={"status": "all"})
+        data = await res.json()
+        flags = {o["id"]: o["isTest"] for o in data["orders"]}
+        check("в списке продавца видны все, тестовые с isTest",
+              flags == {order["id"]: True, own["id"]: True, real["id"]: False}, str(flags))
+        check("переписка тестового заказа не зажигает общий счётчик", data["unreadTotal"] == 0,
+              str(data["unreadTotal"]))
+        res = await client.get("/api/seller/orders", headers=seller, params={"status": "all", "test": "hide"})
+        data = await res.json()
+        check("фильтр «Скрыть тестовые»", [o["id"] for o in data["orders"]] == [real["id"]] and data["total"] == 1,
+              str([o["id"] for o in data["orders"]]))
+        res = await client.get("/api/bootstrap", headers=seller)
+        check("точка на вкладке продавца не горит из-за тестовых", (await res.json())["sellerUnread"] == 0)
+    finally:
+        await client.close()
 
 
 def bump(path: pathlib.Path, seconds: int) -> None:
@@ -1230,6 +1298,9 @@ async def main() -> int:
     await db.init(os.path.join(tmp, "filters.sqlite3"))
     await test_seller_filters(cfg, bot, svc)
 
+    await db.close()
+    await db.init(os.path.join(tmp, "testers.sqlite3"))
+    await test_test_orders(cfg)
     await db.close()
     await test_migration(tmp)
 

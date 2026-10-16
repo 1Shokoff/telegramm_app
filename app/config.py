@@ -71,6 +71,8 @@ class Config:
     bot_token: str
     seller_ids: tuple[int, ...]
     supplier_ids: tuple[int, ...]
+    # Аккаунты команды, которые проверяют бота: их заказы — тестовые.
+    test_ids: tuple[int, ...]
     support_username: str
     webapp_url: str
     price_rub: int
@@ -118,6 +120,9 @@ class Config:
 
     def is_supplier(self, tg_id: int | None) -> bool:
         return tg_id is not None and tg_id in self.supplier_ids
+
+    def is_tester(self, tg_id: int | None) -> bool:
+        return tg_id is not None and tg_id in self.test_ids
 
     def role_of(self, tg_id: int | None) -> str:
         """Роль аккаунта. Продавец сильнее поставщика: его права включают чужие."""
@@ -225,6 +230,7 @@ def load_config() -> Config:
         bot_token=token,
         seller_ids=sellers,
         supplier_ids=suppliers,
+        test_ids=_ids("TEST_IDS"),
         support_username=_s("SUPPORT_USERNAME").lstrip("@"),
         webapp_url=_s("WEBAPP_URL").rstrip("/"),
         price_rub=_i("PRICE_RUB", 3000),

@@ -38,7 +38,7 @@ async def _card(order: dict) -> tuple[str, InlineKeyboardMarkup]:
     full = dict(order)
     full.setdefault("username", user.get("username"))
     full.setdefault("first_name", user.get("first_name"))
-    return texts.seller_order_card(full), keyboards.seller_order_kb(order)
+    return texts.test_mark(order) + texts.seller_order_card(full), keyboards.seller_order_kb(order)
 
 
 # ------------------------------------------------------------------- команды
@@ -57,8 +57,7 @@ async def cmd_orders(message: Message, command: CommandObject) -> None:
         [
             InlineKeyboardButton(
                 # По одному номеру не понять, чей заказ, — рядом покупатель.
-                text="%s · %s · %s"
-                % (o["code"], texts.buyer_label(o), const.TITLES.get(o["status"], o["status"])),
+                text=texts.list_label(o, const.TITLES.get(o["status"], o["status"])),
                 callback_data=keyboards.cb("card", o["id"]),
             )
         ]
@@ -86,6 +85,9 @@ async def cmd_stats(message: Message) -> None:
             lines.append("%s — %d" % (title, n))
     lines.append("")
     lines.append("Всего: %d" % total)
+    tests = await db.count_test_orders()
+    if tests:
+        lines.append("🧪 Тестовых, не входят в счёт: %d" % tests)
     await message.answer("\n".join(lines))
 
 

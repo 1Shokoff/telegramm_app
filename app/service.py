@@ -96,8 +96,22 @@ class OrderService:
         kind: str | None = None,
         order_id: int | None = None,
     ) -> None:
-        for seller_id in self.cfg.seller_ids:
-            await self.send(seller_id, text, kb, kind=kind, order_id=order_id)
+        recipients, mark = await self._staff(self.cfg.seller_ids, order_id)
+        for seller_id in recipients:
+            await self.send(seller_id, mark + text, kb, kind=kind, order_id=order_id)
+
+    async def _staff(self, ids: tuple[int, ...], order_id: int | None) -> tuple[list[int], str]:
+        """Кому из продавцов или поставщиков писать о заказе и с какой пометкой.
+
+        Тестовый заказ (его создал кто-то из TEST_IDS) не должен топить настоящие
+        уведомления: о нём пишем только самому тестировщику — если он продавец
+        или поставщик, он проверит и эту сторону. Остальные видят такой заказ
+        в списках с пометкой 🧪.
+        """
+        order = await db.get_order(order_id) if order_id is not None else None
+        if not order or not order.get("is_test"):
+            return list(ids), ""
+        return [i for i in ids if i == order["user_id"]], texts.TEST_MARK + "\n"
 
     async def notify_suppliers(
         self,
@@ -112,8 +126,9 @@ class OrderService:
         карточку и строку поставщика. Иначе владелец, у которого один аккаунт
         на обе роли, не видел бы уведомлений поставщика вообще.
         """
-        for supplier_id in self.cfg.supplier_ids:
-            await self.send(supplier_id, text, kb, kind=kind, order_id=order_id)
+        recipients, mark = await self._staff(self.cfg.supplier_ids, order_id)
+        for supplier_id in recipients:
+            await self.send(supplier_id, mark + text, kb, kind=kind, order_id=order_id)
 
     async def push_order_to_suppliers(self, order: dict, kind: str) -> None:
         full = await self._with_user(order)
@@ -177,6 +192,7 @@ class OrderService:
             payment_mode=self.cfg.payment_mode,
             prefix=self.cfg.order_prefix,
             app_slug=app_slug,
+            is_test=self.cfg.is_tester(user_id),
         )
         # Согласие с офертой и обработкой данных фиксируем вместе с заказом:
         # так обещано в самих документах, и это пригодится при споре.
@@ -238,8 +254,10 @@ class OrderService:
             header = "🧾 <b>Покупатель прислал ещё один чек</b>"
             kind = const.NOTIFY_CHAT
         kb = keyboards.seller_order_kb(order)
+        recipients, mark = await self._staff(self.cfg.seller_ids, order_id)
+        header = mark + header
         sent = 0
-        for seller_id in self.cfg.seller_ids:
+        for seller_id in recipients:
             if not await self.allowed(seller_id, kind, order_id):
                 continue
             if len(receipts) == 1:

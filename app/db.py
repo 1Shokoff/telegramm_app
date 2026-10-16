@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS orders (
     installed_at TEXT,
     done_at      TEXT,
     -- Покупатель убрал выполненный заказ с экрана; для продавца он остаётся выполненным.
-    closed_at    TEXT
+    closed_at    TEXT,
+    -- Заказ тестировщика из TEST_IDS: ставится при создании и не меняется.
+    is_test      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user   ON orders(user_id);
@@ -131,6 +133,9 @@ async def _migrate() -> None:
     if "closed_at" not in columns:
         await conn().execute("ALTER TABLE orders ADD COLUMN closed_at TEXT")
         log.info("Миграция: добавлена колонка orders.closed_at")
+    if "is_test" not in columns:
+        await conn().execute("ALTER TABLE orders ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
+        log.info("Миграция: добавлена колонка orders.is_test")
     await conn().commit()
 
 
@@ -188,15 +193,20 @@ async def set_blocked(tg_id: int, blocked: bool) -> None:
 
 
 async def create_order(
-    user_id: int, price_rub: int, payment_mode: str, prefix: str, app_slug: str | None = None
+    user_id: int,
+    price_rub: int,
+    payment_mode: str,
+    prefix: str,
+    app_slug: str | None = None,
+    is_test: bool = False,
 ) -> dict:
     ts = now()
     cur = await conn().execute(
         """
-        INSERT INTO orders (code, user_id, status, price_rub, payment_mode, app_slug, created_at, updated_at)
-        VALUES ('', ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO orders (code, user_id, status, price_rub, payment_mode, app_slug, is_test, created_at, updated_at)
+        VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, const.NEW, price_rub, payment_mode, app_slug, ts, ts),
+        (user_id, const.NEW, price_rub, payment_mode, app_slug, int(is_test), ts, ts),
     )
     order_id = int(cur.lastrowid)
     code = "%s-%04d" % (prefix, order_id)
@@ -269,6 +279,7 @@ def _order_filters(
     created_to: str | None,
     unread_only: bool,
     has_udid: bool | None,
+    hide_test: bool = False,
 ) -> tuple[str, list[Any]]:
     """WHERE для списка заказов. Даты — в формате базы (UTC ISO), как пишет now()."""
     sql = " WHERE 1 = 1"
@@ -307,6 +318,8 @@ def _order_filters(
         sql += " AND o.device_udid IS NOT NULL AND o.device_udid <> ''"
     elif has_udid is False:
         sql += " AND (o.device_udid IS NULL OR o.device_udid = '')"
+    if hide_test:
+        sql += " AND o.is_test = 0"
     return sql, args
 
 
@@ -322,8 +335,11 @@ async def list_orders(
     created_to: str | None = None,
     unread_only: bool = False,
     has_udid: bool | None = None,
+    hide_test: bool = False,
 ) -> list[dict]:
-    where, args = _order_filters(status, query, statuses, created_from, created_to, unread_only, has_udid)
+    where, args = _order_filters(
+        status, query, statuses, created_from, created_to, unread_only, has_udid, hide_test
+    )
     sql = (
         "SELECT o.*, u.username, u.first_name "
         "FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id"
@@ -343,9 +359,12 @@ async def count_orders(
     created_to: str | None = None,
     unread_only: bool = False,
     has_udid: bool | None = None,
+    hide_test: bool = False,
 ) -> int:
     """Сколько заказов подходит под фильтры — чтобы не прятать молча тех, кто не влез в список."""
-    where, args = _order_filters(status, query, statuses, created_from, created_to, unread_only, has_udid)
+    where, args = _order_filters(
+        status, query, statuses, created_from, created_to, unread_only, has_udid, hide_test
+    )
     row = await _fetchone(
         "SELECT COUNT(*) AS n FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id" + where, args
     )
@@ -364,8 +383,14 @@ async def list_orders_with_udid(limit: int = 50) -> list[dict]:
 
 
 async def status_counts() -> dict[str, int]:
-    rows = await _fetchall("SELECT status, COUNT(*) AS n FROM orders GROUP BY status")
+    """Счётчики по статусам — только настоящие заказы, тестовые не считаются."""
+    rows = await _fetchall("SELECT status, COUNT(*) AS n FROM orders WHERE is_test = 0 GROUP BY status")
     return {r["status"]: r["n"] for r in rows}
+
+
+async def count_test_orders() -> int:
+    row = await _fetchone("SELECT COUNT(*) AS n FROM orders WHERE is_test = 1")
+    return int(row["n"]) if row else 0
 
 
 _TIMESTAMP_FIELD = {
@@ -571,10 +596,14 @@ async def order_notify_map(user_id: int) -> dict[int, bool]:
     return {int(r["order_id"]): bool(r["enabled"]) for r in rows}
 
 
-async def unread_by_order(viewer: str) -> dict[int, int]:
-    """Сколько непрочитанных в каждом заказе — для счётчиков в списке продавца."""
+async def unread_by_order(viewer: str, skip_test: bool = False) -> dict[int, int]:
+    """Сколько непрочитанных в каждом заказе — для счётчиков в списке продавца.
+
+    skip_test — без тестовых заказов: их переписка не должна зажигать общий счётчик.
+    """
     rows = await _fetchall(
-        "SELECT order_id, COUNT(*) AS n FROM messages WHERE %s = 0 GROUP BY order_id"
-        % _seen_column(viewer)
+        "SELECT m.order_id, COUNT(*) AS n FROM messages m JOIN orders o ON o.id = m.order_id "
+        "WHERE m.%s = 0%s GROUP BY m.order_id"
+        % (_seen_column(viewer), " AND o.is_test = 0" if skip_test else "")
     )
     return {int(r["order_id"]): int(r["n"]) for r in rows}

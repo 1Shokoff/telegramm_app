@@ -556,7 +556,8 @@ async function loadChat(scroll) {
   if (state.boot) {
     state.boot.unread = 0;
     const row = (state.seller.orders || []).find((o) => o.id === state.chat.orderId);
-    if (row && row.unread) {
+    // Тестовые заказы в общий счётчик не входят — и вычитать их из него нечего.
+    if (row && row.unread && !row.isTest) {
       state.boot.sellerUnread = Math.max(0, (state.boot.sellerUnread || 0) - row.unread);
       row.unread = 0;
     }
@@ -979,11 +980,16 @@ function viewAbout() {
 
 /* -------------------------------------------------------------- продавец */
 
+/* Заказ тестировщика из TEST_IDS: в списках и карточке — пометка 🧪. */
+function testTag(o) {
+  return o.isTest ? ' <span class="test-tag">🧪 тест</span>' : '';
+}
+
 function sellerLine(o) {
   return (
     '<button class="order-line" data-action="seller-open:' + o.id + '">' +
       '<span class="status-dot ' + esc(o.status) + '"></span>' +
-      '<span class="grow"><span class="code">' + esc(o.code) + '</span><br>' +
+      '<span class="grow"><span class="code">' + esc(o.code) + '</span>' + testTag(o) + '<br>' +
       '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.priceText) +
       (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
       (o.unread ? '<span class="count-badge">' + o.unread + '</span>' : '') +
@@ -1021,7 +1027,7 @@ function udidValue(udid, key) {
 function viewSellerOrder(o) {
   return (
     '<button class="backlink" data-action="seller-back">← Все заказы</button>' +
-    '<div class="section-head"><h2>' + esc(o.code) + '</h2>' +
+    '<div class="section-head"><h2>' + esc(o.code) + testTag(o) + '</h2>' +
       '<span class="badge">' + esc(o.statusTitle) + '</span></div>' +
     '<div class="card">' +
       '<div class="row"><span class="label">Покупатель</span><span class="value">' +
@@ -1128,7 +1134,9 @@ const SELLER_GROUP_STATUSES = {
 };
 
 function defaultSellerPrefs() {
-  return { sort: 'created_desc', statuses: [], period: '', from: '', to: '', unread: false, udid: '' };
+  return {
+    sort: 'created_desc', statuses: [], period: '', from: '', to: '', unread: false, udid: '', hideTest: false,
+  };
 }
 
 function sellerPrefs(group) {
@@ -1159,6 +1167,7 @@ function activeSellerFilters(prefs, group) {
   if (prefs.period && (prefs.period !== 'custom' || prefs.from || prefs.to)) n += 1;
   if (prefs.unread) n += 1;
   if (SELLER_GROUP_STATUSES[group] && prefs.udid) n += 1;
+  if (prefs.hideTest) n += 1;
   return n;
 }
 
@@ -1194,6 +1203,7 @@ function sellerParams(params, group) {
   if (range.from && !isNaN(range.from)) params.set('from', range.from.toISOString());
   if (range.to && !isNaN(range.to)) params.set('to', range.to.toISOString());
   if (prefs.unread) params.set('unread', '1');
+  if (prefs.hideTest) params.set('test', 'hide');
 }
 
 function sellerToolbar() {
@@ -1248,6 +1258,8 @@ function sellerPanel(prefs, group) {
         : '') +
       '<div class="panel-label">Сообщения</div>' +
       '<div class="panel-chips">' + chip('seller-unread', 'Только непрочитанные', prefs.unread) + '</div>' +
+      '<div class="panel-label">Тестовые заказы</div>' +
+      '<div class="panel-chips">' + chip('seller-hidetest', '🧪 Скрыть тестовые', prefs.hideTest) + '</div>' +
       (statuses
         ? '<div class="panel-label">UDID</div><div class="panel-chips">' +
             [['', 'Любой'], ['yes', 'Есть'], ['no', 'Нет']]
@@ -1290,7 +1302,7 @@ function supplierLine(o) {
   return (
     '<button class="order-line" data-action="supplier-open:' + o.id + '">' +
       '<span class="status-dot ' + esc(o.status) + '"></span>' +
-      '<span class="grow"><span class="code">' + esc(o.code) + '</span><br>' +
+      '<span class="grow"><span class="code">' + esc(o.code) + '</span>' + testTag(o) + '<br>' +
       '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(dateOf(o.createdAt)) +
       (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
       '<span class="meta">›</span>' +
@@ -2126,6 +2138,12 @@ const actions = {
   'seller-unread': () => {
     const prefs = sellerPrefs(state.seller.status);
     prefs.unread = !prefs.unread;
+    sellerPrefsChanged();
+  },
+
+  'seller-hidetest': () => {
+    const prefs = sellerPrefs(state.seller.status);
+    prefs.hideTest = !prefs.hideTest;
     sellerPrefsChanged();
   },
 };

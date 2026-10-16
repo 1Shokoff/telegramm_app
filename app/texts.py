@@ -55,6 +55,19 @@ def user_line(order: dict) -> str:
     return "%s%s · <code>%s</code>" % (name, tail, order["user_id"])
 
 
+# Заказ тестировщика из TEST_IDS — первой строкой во всём, что видят продавец и поставщик.
+TEST_MARK = "🧪 <b>Тестовый заказ</b>"
+
+
+def test_mark(order: dict) -> str:
+    return TEST_MARK + "\n" if order.get("is_test") else ""
+
+
+def list_label(order: dict, tail: str) -> str:
+    """Подпись кнопки в списке заказов: номер, покупатель и хвост (статус или время)."""
+    return "%s%s · %s · %s" % ("🧪 " if order.get("is_test") else "", order["code"], buyer_label(order), tail)
+
+
 def buyer_label(order: dict, limit: int = 20) -> str:
     """Покупатель для подписи кнопки — обычный текст, без HTML: @юзернейм, иначе имя."""
     username = order.get("username")

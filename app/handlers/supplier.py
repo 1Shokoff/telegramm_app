@@ -32,7 +32,7 @@ async def _card(order: dict) -> tuple[str, InlineKeyboardMarkup]:
     full = dict(order)
     full.setdefault("username", user.get("username"))
     full.setdefault("first_name", user.get("first_name"))
-    return texts.supplier_order_card(full), keyboards.supplier_order_kb(order)
+    return texts.test_mark(order) + texts.supplier_order_card(full), keyboards.supplier_order_kb(order)
 
 
 # ------------------------------------------------------------------- команды
@@ -48,7 +48,7 @@ async def cmd_udids(message: Message) -> None:
     rows = [
         [
             InlineKeyboardButton(
-                text="%s · %s · %s" % (o["code"], texts.buyer_label(o), texts.when(o["created_at"])),
+                text=texts.list_label(o, texts.when(o["created_at"])),
                 callback_data=keyboards.cb("ucard", o["id"]),
             )
         ]
