@@ -55,7 +55,8 @@ def _tokens(cfg: Config, updated: str, bot_username: str = "") -> dict[str, str]
         "phone": cfg.contact_phone or _missing("телефон"),
         "support": ("@" + cfg.support_username) if cfg.support_username else _missing("аккаунт Telegram"),
         "bot_link": ("@" + bot) if bot else _missing("бота в Telegram"),
-        "price": "%s ₽" % "{:,}".format(cfg.price_rub).replace(",", " "),
+        # Цена, которую платят сегодня: во время акции — цена по акции.
+        "price": "%s ₽" % "{:,}".format(cfg.current_price).replace(",", " "),
         "site": cfg.webapp_url or _missing("адрес сайта"),
         "updated": updated,
     }

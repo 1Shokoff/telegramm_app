@@ -57,11 +57,41 @@ SELLER_LIMIT = 100
 
 
 def catalog_public(cfg: Config) -> list[dict]:
-    """Каталог для витрины: товары из сборок в папке и цена для показа."""
-    return [
-        dict(item, priceText=texts.money(item["price"]))
-        for item in catalog.public_catalog(cfg.price_rub)
-    ]
+    """Каталог для витрины: товары из сборок в папке и цена для показа.
+
+    Во время акции у товаров по общей цене есть и зачёркнутая обычная.
+    """
+    promo = cfg.promo_active()
+    out = []
+    for item in catalog.public_catalog(cfg.current_price):
+        item = dict(item, priceText=texts.money(item["price"]))
+        if promo and item["price"] == cfg.promo_price_rub:
+            item["oldPriceText"] = texts.money(cfg.price_rub)
+        out.append(item)
+    return out
+
+
+def product_public(cfg: Config) -> dict:
+    """Товар «весь каталог»: цена, которую платят сегодня, и акция, если она идёт."""
+    data = {
+        "title": cfg.product_title,
+        "subtitle": cfg.product_subtitle,
+        "price": cfg.current_price,
+        "priceText": texts.money(cfg.current_price),
+        "appsCount": catalog.count(),
+        "promo": None,
+    }
+    if cfg.promo_active():
+        data["promo"] = {
+            "label": cfg.promo_title,
+            "percent": cfg.promo_percent,
+            "oldPrice": cfg.price_rub,
+            "oldPriceText": texts.money(cfg.price_rub),
+            "discountText": texts.money(cfg.price_rub - cfg.promo_price_rub),
+            "until": cfg.promo_until.isoformat() if cfg.promo_until else None,
+            "untilText": cfg.promo_until_text,
+        }
+    return data
 
 
 def requisites_public(cfg: Config) -> list[dict]:
@@ -253,7 +283,7 @@ async def bootstrap(request: web.Request) -> web.Response:
     cfg = cfg_of(request)
     user = await current_user(request)
     await db.upsert_user(user.id, user.username, user.first_name)
-    order = await db.get_active_order(user.id)
+    order = await service_of(request).fresh_price(await db.get_active_order(user.id))
 
     return web.json_response(
         {
@@ -264,13 +294,7 @@ async def bootstrap(request: web.Request) -> web.Response:
                 "isSeller": cfg.is_seller(user.id),
                 "isSupplier": cfg.is_supplier(user.id),
             },
-            "product": {
-                "title": cfg.product_title,
-                "subtitle": cfg.product_subtitle,
-                "price": cfg.price_rub,
-                "priceText": texts.money(cfg.price_rub),
-                "appsCount": catalog.count(),
-            },
+            "product": product_public(cfg),
             "payment": {
                 "mode": cfg.payment_mode,
                 "details": cfg.payment_details,
@@ -318,13 +342,7 @@ async def public_bootstrap(request: web.Request) -> web.Response:
             "public": True,
             "user": {"isSeller": False, "isSupplier": False},
             "order": None,
-            "product": {
-                "title": cfg.product_title,
-                "subtitle": cfg.product_subtitle,
-                "price": cfg.price_rub,
-                "priceText": texts.money(cfg.price_rub),
-                "appsCount": catalog.count(),
-            },
+            "product": product_public(cfg),
             # Реквизиты перевода гостю не показываем: они нужны только в заказе.
             "payment": {
                 "mode": cfg.payment_mode, "details": "",
@@ -356,7 +374,7 @@ async def api_doc(request: web.Request) -> web.Response:
 @routes.get("/api/order")
 async def get_order(request: web.Request) -> web.Response:
     user = await current_user(request)
-    order = await db.get_active_order(user.id)
+    order = await service_of(request).fresh_price(await db.get_active_order(user.id))
     return web.json_response({"order": order_public(order)})
 
 

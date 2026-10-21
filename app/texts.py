@@ -15,6 +15,53 @@ def money(rub: int) -> str:
     return "{:,} ₽".format(rub).replace(",", " ")
 
 
+def price_html(cfg: Config) -> str:
+    """Цена каталога: во время акции — зачёркнутая обычная и цена по акции."""
+    if cfg.promo_active():
+        return "<s>%s</s> <b>%s</b>" % (money(cfg.price_rub), money(cfg.promo_price_rub))
+    return "<b>%s</b>" % money(cfg.current_price)
+
+
+def promo_line(cfg: Config) -> str:
+    """«🔥 −50% в честь открытия — акция до 30 ноября» или пусто, если акции нет."""
+    if not cfg.promo_active():
+        return ""
+    tail = " — акция %s" % cfg.promo_until_text if cfg.promo_until else ""
+    return "🔥 <b>%s</b>%s" % (e(cfg.promo_title), tail)
+
+
+def bot_description(cfg: Config) -> str:
+    """Текст профиля бота до нажатия «Старт» (обычный текст, до 512 знаков)."""
+    text = (
+        "iApki — приложения, которых нет в App Store, снова на вашем iPhone.\n\n"
+        "Весь каталог за %s: оплата, UDID, установка сертификата и пошаговая "
+        "инструкция — всё в этом чате.\n\nНажмите «Старт», чтобы открыть витрину."
+    ) % money(cfg.current_price)
+    if cfg.promo_active():
+        until = ", акция %s" % cfg.promo_until_text if cfg.promo_until else ""
+        text = "🔥 %s: весь каталог за %s вместо %s%s.\n\n%s" % (
+            cfg.promo_title, money(cfg.promo_price_rub), money(cfg.price_rub), until, text
+        )
+    return text[:512]
+
+
+def bot_short_description(cfg: Config) -> str:
+    """Короткое описание в профиле и при пересылке бота (до 120 знаков)."""
+    if cfg.promo_active():
+        until = ", %s" % cfg.promo_until_text if cfg.promo_until else ""
+        text = "🔥 %s: весь каталог за %s вместо %s%s" % (
+            cfg.promo_title, money(cfg.promo_price_rub), money(cfg.price_rub), until
+        )
+    else:
+        text = "Приложения для iPhone вне App Store. Весь каталог за %s." % money(cfg.current_price)
+    return text[:120]
+
+
+def promo_applies(cfg: Config, price_rub: int) -> bool:
+    """Заказ оформлен по цене акции — тогда к сумме дописываем, что скидка учтена."""
+    return cfg.promo_active() and price_rub == cfg.promo_price_rub
+
+
 def plural(n: int, one: str, few: str, many: str) -> str:
     """plural(3, «файл», «файла», «файлов») → «3 файла»."""
     tail = n % 100
@@ -177,11 +224,13 @@ def supplier_order_card(order: dict) -> str:
     return "\n".join(lines)
 
 
-def welcome(first_name: str | None, price_rub: int, apps_count: int) -> str:
+def welcome(first_name: str | None, cfg: Config, apps_count: int) -> str:
     name = e(first_name or "")
     hello = "Привет, %s!" % name if name else "Привет!"
+    promo = promo_line(cfg)
     return (
         "%s\n\n"
+        "%s"
         "<b>iApki — твои приложения снова на iPhone.</b>\n"
         "Весь каталог из %d приложений за %s. "
         "Без лимита установок и доплат за приложения.\n\n"
@@ -190,7 +239,7 @@ def welcome(first_name: str | None, price_rub: int, apps_count: int) -> str:
         "2. Вы присылаете UDID iPhone\n"
         "3. Мы ставим сертификат\n"
         "4. Вы получаете инструкцию\n"
-    ) % (hello, apps_count, money(price_rub))
+    ) % (hello, promo + "\n\n" if promo else "", apps_count, price_html(cfg))
 
 
 def payment_instructions(order: dict, cfg: Config) -> str:
@@ -215,6 +264,8 @@ def payment_instructions(order: dict, cfg: Config) -> str:
 
     # Сумму показываем всегда: она известна и без заполненных реквизитов.
     lines.append("Сумма к оплате: <code>%s</code>" % e(cfg.amount_text(order["price_rub"])))
+    if promo_applies(cfg, order["price_rub"]):
+        lines.append("<i>Скидка уже учтена: %s.</i>" % e(cfg.promo_title))
 
     if rows:
         lines.append("")

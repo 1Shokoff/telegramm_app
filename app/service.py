@@ -177,7 +177,7 @@ class OrderService:
         """
         if app_slug is not None and catalog.get_app(app_slug) is None:
             raise ServiceError("Такого приложения нет в каталоге.")
-        price = catalog.app_price(catalog.get_app(app_slug), self.cfg.price_rub)
+        price = catalog.app_price(catalog.get_app(app_slug), self.cfg.current_price)
 
         existing = await db.get_active_order(user_id)
         if existing and existing["status"] in const.OPEN_STATUSES:
@@ -205,6 +205,27 @@ class OrderService:
         await self.push_order_to_sellers(order, "🆕 <b>Новый заказ</b>", const.NOTIFY_NEW_ORDER)
         await self.push_order_to_suppliers(order, const.NOTIFY_NEW_ORDER)
         return order, True
+
+    async def fresh_price(self, order: dict | None) -> dict | None:
+        """Неоплаченный заказ без чека всегда стоит по текущей цене.
+
+        Цена меняется сменой PRICE_RUB или началом и концом акции, а заказ
+        хранит цену на момент оформления. Пока по заказу не заявлена оплата,
+        покупатель платит столько, сколько стоит сейчас; заказ с чеком не трогаем —
+        деньги уже могли уйти.
+        """
+        if not order or order["status"] != const.NEW:
+            return order
+        slug = order.get("app_slug")
+        app = catalog.get_app(slug) if slug else None
+        if slug and app is None:
+            return order  # сборку убрали — цену не угадываем
+        price = catalog.app_price(app, self.cfg.current_price)
+        if price == order["price_rub"]:
+            return order
+        updated = await db.set_order_product(order["id"], slug, price)
+        log.info("Заказ %s: цена %s → %s", order["code"], order["price_rub"], price)
+        return updated or order
 
     async def _load(self, order_id: int) -> dict:
         order = await db.get_order(order_id)
@@ -242,6 +263,8 @@ class OrderService:
         actor = "user:%d" % actor_id
         claimed = order["status"] == const.NEW and order["payment_mode"] == "manual"
         if claimed:
+            # Цена фиксируется в момент, когда заявлена оплата: продавец сверяет именно её.
+            await self.fresh_price(order)
             updated = await db.set_status(order_id, const.PAYMENT_CHECK, actor, "покупатель приложил чек")
             assert updated
             order = updated

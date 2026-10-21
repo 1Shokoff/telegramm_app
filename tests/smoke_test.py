@@ -17,7 +17,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
@@ -64,7 +64,7 @@ from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
 from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, texts, udid as udid_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
-from app.config import load_config  # noqa: E402
+from app.config import load_config, today_msk  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
 
 SPACED_UDID = "2b6f0cc904d137be2e17 30235f5664094b831186"
@@ -1123,6 +1123,119 @@ async def test_test_orders(cfg) -> None:
         await client.close()
 
 
+async def test_promo(cfg) -> None:
+    """Акция: цена по акции до последнего дня, зачёркнутая обычная, пересчёт неоплаченных."""
+    print("\nАкция")
+    today = today_msk()
+    promo = replace(cfg, price_rub=3000, promo_price_rub=1500, promo_until=today + timedelta(days=10),
+                    promo_label="-50% в честь открытия")
+    ended = replace(promo, promo_until=today - timedelta(days=1))
+    endless = replace(promo, promo_until=None, promo_label="")
+
+    check("акция идёт до последнего дня включительно", promo.promo_active(promo.promo_until))
+    check("на следующий день — нет", not promo.promo_active(promo.promo_until + timedelta(days=1)))
+    check("во время акции платят цену по акции", promo.current_price == 1500)
+    check("после акции — снова обычная цена", ended.current_price == 3000 and not ended.promo_active())
+    check("без срока акция бессрочная", endless.promo_active() and endless.current_price == 1500)
+    check("процент считается сам", promo.promo_percent == 50)
+    check("подпись по умолчанию — «Скидка 50%»", endless.promo_title == "Скидка 50%")
+    check("срок по-русски", replace(promo, promo_until=date(2026, 11, 30)).promo_until_text == "до 30 ноября")
+    check("без акции промо-цены нет", not cfg.promo_active() and cfg.current_price == cfg.price_rub)
+
+    check("цена со скидкой: старая зачёркнута", texts.price_html(promo) == "<s>3 000 ₽</s> <b>1 500 ₽</b>")
+    check("после акции зачёркнутой цены нет", texts.price_html(ended) == "<b>3 000 ₽</b>")
+    hello = texts.welcome("Наташа", promo, 15)
+    check("в приветствии подпись акции и срок",
+          "-50% в честь открытия" in hello and promo.promo_until_text in hello and "<s>3 000 ₽</s>" in hello, hello[:200])
+    check("после акции приветствие без неё", "в честь открытия" not in texts.welcome("Наташа", ended, 15))
+    check("подпись из .env экранируется", "&lt;b&gt;" in texts.promo_line(replace(promo, promo_label="<b>")))
+    labels = [b.text for row in keyboards.start_kb(promo, False).inline_keyboard for b in row]
+    check("кнопка в приветствии зовёт со скидкой", any("−50%" in t for t in labels), str(labels))
+    desc, short = texts.bot_description(promo), texts.bot_short_description(promo)
+    check("описание бота с акцией и в лимитах Telegram",
+          "-50% в честь открытия" in desc and len(desc) <= 512 and "1 500 ₽" in short and len(short) <= 120, short)
+    check("после акции описание без неё", "в честь открытия" not in texts.bot_description(ended))
+    long_label = replace(promo, promo_label="Ж" * 600)
+    check("длинная подпись не ломает лимиты описания",
+          len(texts.bot_description(long_label)) <= 512 and len(texts.bot_short_description(long_label)) <= 120)
+
+    # Неоплаченный заказ по старой цене пересчитывается, заказ с чеком — нет.
+    bot = FakeBot()
+    old = OrderService(bot, replace(cfg, price_rub=3000))
+    svc = OrderService(bot, promo)
+    for uid in (701, 702):
+        await db.upsert_user(uid, "u%d" % uid, "Покупатель")
+    order, _ = await old.get_or_create_order(701)
+    check("заказ оформлен по старой цене", order["price_rub"] == 3000)
+    fresh = await svc.fresh_price(await db.get_order(order["id"]))
+    check("неоплаченный заказ пересчитан на цену акции", fresh["price_rub"] == 1500)
+    check("пересчёт сохранён в базе", (await db.get_order(order["id"]))["price_rub"] == 1500)
+    check("в реквизитах сказано, что скидка учтена", "Скидка уже учтена" in texts.payment_instructions(fresh, promo))
+    paid, _ = await old.get_or_create_order(702)
+    await old.submit_receipt(paid["id"], 702, Receipt(title="чек.jpg", file="f", kind="photo"))
+    kept = await svc.fresh_price(await db.get_order(paid["id"]))
+    check("заказ с чеком хранит цену, по которой заявлена оплата", kept["price_rub"] == 3000)
+    back = OrderService(bot, ended)
+    again = await back.fresh_price(await db.get_order(order["id"]))
+    check("после конца акции неоплаченный заказ стоит обычную цену", again["price_rub"] == 3000)
+    fresh = await svc.fresh_price(again)
+
+    app = build_app(promo, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        res = await client.get("/api/bootstrap", headers={"X-Init-Data": make_init_data(701, "Покупатель")})
+        data = await res.json()
+        product = data["product"]
+        check("витрина: цена по акции", product["price"] == 1500 and product["priceText"] == "1 500 ₽")
+        check("витрина: акция со старой ценой, скидкой и сроком",
+              product["promo"] and product["promo"]["oldPriceText"] == "3 000 ₽"
+              and product["promo"]["discountText"] == "1 500 ₽" and product["promo"]["percent"] == 50
+              and product["promo"]["untilText"] == promo.promo_until_text, str(product["promo"]))
+        check("bootstrap отдаёт заказ уже по текущей цене", data["order"]["price"] == 1500)
+        res = await client.get("/api/public")
+        public = (await res.json())["product"]
+        check("публичная витрина тоже со скидкой", public["promo"] and public["price"] == 1500)
+        res = await client.get("/docs/offer")
+        check("в оферте цена, которую платят сегодня", "1 500 ₽" in await res.text())
+    finally:
+        await client.close()
+
+    app = build_app(ended, bot, back)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        res = await client.get("/api/public")
+        public = (await res.json())["product"]
+        check("после акции витрина без неё", public["promo"] is None and public["price"] == 3000)
+    finally:
+        await client.close()
+
+    # Опечатки в настройках акции останавливают запуск с понятным текстом.
+    saved = {k: os.environ.get(k) for k in ("PRICE_RUB", "PROMO_PRICE_RUB", "PROMO_UNTIL")}
+    try:
+        os.environ.update({"PRICE_RUB": "3000", "PROMO_PRICE_RUB": "3000", "PROMO_UNTIL": ""})
+        try:
+            load_config()
+            check("цена по акции не ниже обычной — ошибка", False)
+        except SystemExit as exc:
+            check("цена по акции не ниже обычной — ошибка", "PROMO_PRICE_RUB" in str(exc))
+        os.environ.update({"PROMO_PRICE_RUB": "1500", "PROMO_UNTIL": "31/11/2026"})
+        try:
+            load_config()
+            check("кривая дата акции — ошибка", False)
+        except SystemExit as exc:
+            check("кривая дата акции — ошибка", "PROMO_UNTIL" in str(exc))
+        os.environ.update({"PROMO_UNTIL": "2026-11-30"})
+        check("дата и в формате 2026-11-30", load_config().promo_until == date(2026, 11, 30))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def bump(path: pathlib.Path, seconds: int) -> None:
     """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
     moment = time.time() + seconds
@@ -1301,6 +1414,9 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "testers.sqlite3"))
     await test_test_orders(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "promo.sqlite3"))
+    await test_promo(cfg)
     await db.close()
     await test_migration(tmp)
 

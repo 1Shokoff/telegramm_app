@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from . import catalog, const
@@ -9,6 +10,19 @@ from . import catalog, const
 PAYMENT_MODES = ("manual", "demo", "stars")
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Сроки акции считаем по Москве. Перехода на летнее время там нет с 2014 года,
+# поэтому хватает постоянного смещения — без зависимости от tzdata в образе.
+MSK = timezone(timedelta(hours=3))
+
+MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+def today_msk() -> date:
+    return datetime.now(MSK).date()
 
 
 def load_env_file(name: str = ".env") -> None:
@@ -57,6 +71,19 @@ def _multiline(name: str) -> str:
     return _s(name).replace("\\n", "\n")
 
 
+def _date(name: str) -> date | None:
+    """Дата из .env: 30.11.2026 или 2026-11-30. Пусто — None, опечатка — остановка с объяснением."""
+    raw = _s(name)
+    if not raw:
+        return None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    raise SystemExit(f"{name}={raw!r}: дата пишется как 30.11.2026")
+
+
 def _ids(name: str) -> tuple[int, ...]:
     out: list[int] = []
     for chunk in _s(name).replace(";", ",").split(","):
@@ -75,7 +102,11 @@ class Config:
     test_ids: tuple[int, ...]
     support_username: str
     webapp_url: str
+    # Обычная цена. Пока идёт акция, покупатель платит promo_price_rub.
     price_rub: int
+    promo_price_rub: int
+    promo_until: date | None
+    promo_label: str
     price_stars: int
     product_title: str
     product_subtitle: str
@@ -131,6 +162,35 @@ class Config:
         if self.is_supplier(tg_id):
             return const.ROLE_SUPPLIER
         return const.ROLE_BUYER
+
+    def promo_active(self, today: date | None = None) -> bool:
+        """Акция идёт: цена по акции ниже обычной и последний день ещё не прошёл (по Москве)."""
+        if not (0 < self.promo_price_rub < self.price_rub):
+            return False
+        if self.promo_until is None:
+            return True
+        return (today or today_msk()) <= self.promo_until
+
+    @property
+    def current_price(self) -> int:
+        """Цена, которую покупатель платит сегодня: по акции, пока она идёт, потом — обычная."""
+        return self.promo_price_rub if self.promo_active() else self.price_rub
+
+    @property
+    def promo_percent(self) -> int:
+        return round((self.price_rub - self.promo_price_rub) * 100 / self.price_rub) if self.price_rub else 0
+
+    @property
+    def promo_title(self) -> str:
+        """Подпись скидки: PROMO_LABEL, а без неё — «Скидка 50%»."""
+        return self.promo_label or "Скидка %d%%" % self.promo_percent
+
+    @property
+    def promo_until_text(self) -> str:
+        """«до 30 ноября» — или пусто, если срок не задан."""
+        if self.promo_until is None:
+            return ""
+        return "до %d %s" % (self.promo_until.day, MONTHS_GENITIVE[self.promo_until.month - 1])
 
     def amount_text(self, price_rub: int) -> str:
         """Сумма к переводу: значение из .env важнее цены заказа."""
@@ -219,6 +279,14 @@ def load_config() -> Config:
     if mode == "stars" and stars <= 0:
         raise SystemExit("PAYMENT_MODE=stars требует PRICE_STARS > 0")
 
+    price = _i("PRICE_RUB", 3000)
+    promo = _i("PROMO_PRICE_RUB", 0)
+    if promo and promo >= price:
+        raise SystemExit(
+            f"PROMO_PRICE_RUB={promo} не ниже PRICE_RUB={price}: в PRICE_RUB — обычная цена, "
+            "в PROMO_PRICE_RUB — цена по акции"
+        )
+
     proxy = _s("TELEGRAM_PROXY")
     if proxy and "://" not in proxy:
         raise SystemExit(
@@ -233,7 +301,10 @@ def load_config() -> Config:
         test_ids=_ids("TEST_IDS"),
         support_username=_s("SUPPORT_USERNAME").lstrip("@"),
         webapp_url=_s("WEBAPP_URL").rstrip("/"),
-        price_rub=_i("PRICE_RUB", 3000),
+        price_rub=price,
+        promo_price_rub=promo,
+        promo_until=_date("PROMO_UNTIL"),
+        promo_label=_s("PROMO_LABEL"),
         price_stars=stars,
         product_title=_s("PRODUCT_TITLE", "Доступ для iPhone"),
         product_subtitle=_s("PRODUCT_SUBTITLE", "Весь каталог приложений"),

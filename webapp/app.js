@@ -165,8 +165,27 @@ function appCard(app, index) {
   );
 }
 
+/* Акция: обычная цена зачёркнута рядом с ценой по акции. Данные приходят
+   с сервера (product.promo), сроки и подпись задаются в .env. */
+function promoOf() {
+  return (state.boot && state.boot.product && state.boot.product.promo) || null;
+}
+
+function priceHtml(priceText, oldPriceText) {
+  if (!oldPriceText) return esc(priceText);
+  return '<s class="old-price">' + esc(oldPriceText) + '</s> <span class="new-price">' + esc(priceText) + '</span>';
+}
+
+function promoPill(promo) {
+  if (!promo) return '';
+  return '<div class="promo-pill">🔥 ' + esc(promo.label) +
+    (promo.untilText ? ' · ' + esc(promo.untilText) : '') + '</div>';
+}
+
 function viewHome() {
   const b = state.boot;
+  const promo = promoOf();
+  const catalogPrice = priceHtml(b.product.priceText, promo && promo.oldPriceText);
   const featured = (b.featured || []).map(appBySlug).filter(Boolean);
   const cats = ['Все'].concat(b.categories || []);
   const list = state.filter === 'Все'
@@ -179,8 +198,9 @@ function viewHome() {
         '<span class="eyebrow">Приложения для iPhone</span>' +
         '<span class="badge">iOS</span>' +
       '</div>' +
+      promoPill(promo) +
       '<h1>Твои приложения.<br><em>Снова на iPhone.</em></h1>' +
-      '<p>Весь каталог за ' + esc(b.product.priceText) + '. Без лимита установок и доплат за приложения.</p>' +
+      '<p>Весь каталог за ' + catalogPrice + '. Без лимита установок и доплат за приложения.</p>' +
       '<div class="cluster">' + featured.map((a) => iconHtml(a)).join('') + '</div>' +
       '<button class="btn btn-primary" data-action="buy-catalog">Весь каталог · ' + esc(b.product.priceText) + ' →</button>' +
       '<div class="cta-note">Один платёж · все приложения каталога</div>' +
@@ -195,7 +215,7 @@ function viewHome() {
     )).join('') + '</div>' +
     '<div class="grid">' + list.map(appCard).join('') + '</div>' +
     '<div class="cta-note mt">Цена не зависит от числа приложений: ' +
-      esc(b.product.priceText) + ' — это установка на одно устройство, ' +
+      catalogPrice + ' — это установка на одно устройство, ' +
       'хоть одного приложения, хоть всего каталога.</div>' +
     '<div class="mt"><button class="btn btn-primary" data-action="buy-catalog">' +
       (state.public ? 'Оформить в Telegram' : 'Весь каталог · ' + esc(b.product.priceText)) + '</button></div>'
@@ -214,6 +234,9 @@ function viewCheckout() {
 
   const app = state.checkoutApp ? appBySlug(state.checkoutApp) : null;
   const price = app ? app.priceText : b.product.priceText;
+  // Скидка действует на общую цену; у приложения со своей ценой её нет.
+  const promo = promoOf();
+  const oldPrice = promo && (app ? app.oldPriceText : promo.oldPriceText);
 
   return (
     stepper(1) +
@@ -226,7 +249,11 @@ function viewCheckout() {
         ' · UDID укажете следующим шагом</div></div>' +
       '</div>' +
       (app && app.desc ? '<div class="product-desc">' + esc(app.desc) + '</div>' : '') +
-      '<div class="row"><span class="label">Цена</span><span class="value">' + esc(price) + '</span></div>' +
+      '<div class="row"><span class="label">Цена</span><span class="value">' + priceHtml(price, oldPrice) + '</span></div>' +
+      (oldPrice
+        ? '<div class="row"><span class="label">Скидка</span><span class="value promo-value">' +
+            esc(promo.label) + ' · −' + esc(promo.discountText) + '</span></div>'
+        : '') +
       '<div class="row"><span class="label">Оплата</span><span class="value">' + esc(modeText) + '</span></div>' +
       (b.payment.mode === 'stars'
         ? '<div class="row"><span class="label">Сумма в Stars</span><span class="value">' + (b.payment.stars || '—') + '</span></div>'
@@ -320,9 +347,16 @@ function proofBlock() {
   );
 }
 
+/* Заказ оформлен по цене акции — показываем, какой была цена без скидки. */
+function orderPromo(order) {
+  const promo = promoOf();
+  return promo && order && order.price === state.boot.product.price ? promo : null;
+}
+
 function viewPayment(order) {
   const b = state.boot;
   const mode = order.paymentMode;
+  const promo = orderPromo(order);
   let action = '';
   if (mode === 'demo') {
     action = '<button class="btn btn-primary" data-action="pay-demo">Имитировать оплату</button>' +
@@ -336,7 +370,8 @@ function viewPayment(order) {
   return (
     stepper(1) +
     '<h1>Оплата заказа</h1>' +
-    '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' + esc(order.priceText) + '</p>' +
+    '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' +
+      priceHtml(order.priceText, promo && promo.oldPriceText) + '</p>' +
     '<div class="card">' +
       (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
       action +
@@ -369,12 +404,15 @@ function paymentDetails(order) {
 
 function amountRow(order) {
   // Сумма из .env важнее цены заказа: продавец может попросить другую.
-  const text = (state.boot.payment && state.boot.payment.amount) || order.priceText;
+  const fixed = state.boot.payment && state.boot.payment.amount;
+  const text = fixed || order.priceText;
+  const promo = fixed ? null : orderPromo(order);
   return (
     '<div class="req-row">' +
       '<span class="req-text">' +
         '<span class="req-label">Сумма к оплате</span>' +
         '<span class="req-value">' + esc(text) + '</span>' +
+        (promo ? '<span class="req-note">Скидка уже учтена: ' + esc(promo.label) + '</span>' : '') +
       '</span>' +
       copyButton('amount', 'сумму') +
     '</div>'
@@ -961,7 +999,7 @@ function viewAbout() {
       '<div class="row"><span class="label">Каталог</span>' +
         '<span class="value">' + appsCount(b.product.appsCount) + '</span></div>' +
       '<div class="row"><span class="label">Цена</span>' +
-        '<span class="value">' + esc(b.product.priceText) + '</span></div>' +
+        '<span class="value">' + priceHtml(b.product.priceText, promoOf() && promoOf().oldPriceText) + '</span></div>' +
     '</div>' +
     flowline(0) +
     '<div class="section-head"><h2>Документы</h2></div>' +

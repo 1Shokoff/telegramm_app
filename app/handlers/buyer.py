@@ -25,7 +25,8 @@ async def _remember(message: Message) -> None:
         await db.upsert_user(user.id, user.username, user.first_name)
 
 
-async def _show_order(target: Message, cfg: Config, order: dict) -> None:
+async def _show_order(target: Message, cfg: Config, order: dict, service: OrderService) -> None:
+    order = await service.fresh_price(order)
     await target.answer(texts.buyer_order_card(order), reply_markup=keyboards.buyer_order_kb(cfg, order))
 
 
@@ -55,19 +56,19 @@ async def cmd_start(message: Message, cfg: Config) -> None:
     has_open = bool(order and order["status"] in const.OPEN_STATUSES)
     await _send_welcome(
         message,
-        texts.welcome(message.from_user.first_name, cfg.price_rub, catalog.count()),
+        texts.welcome(message.from_user.first_name, cfg, catalog.count()),
         keyboards.start_kb(cfg, has_open),
     )
 
 
 @router.message(Command("order"))
-async def cmd_order(message: Message, cfg: Config) -> None:
+async def cmd_order(message: Message, cfg: Config, service: OrderService) -> None:
     await _remember(message)
     order = await db.get_active_order(message.from_user.id)
     if not order:
         await message.answer("Заказов пока нет. /start — оформить.")
         return
-    await _show_order(message, cfg, order)
+    await _show_order(message, cfg, order, service)
 
 
 @router.message(Command("udid"))
@@ -257,12 +258,14 @@ async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
     await call.message.answer(
         "<b>Оформление заказа</b>\n\n"
         "%s\nUDID укажете следующим шагом.\n\n"
-        "Цена: <b>%s</b> — установка любых приложений каталога на одно устройство.\n"
+        "%s"
+        "Цена: %s — установка любых приложений каталога на одно устройство.\n"
         "Оплата: %s\n\n"
         "%s%s"
         % (
             texts.e(cfg.product_title),
-            texts.money(cfg.price_rub),
+            texts.promo_line(cfg) + "\n" if cfg.promo_active() else "",
+            texts.price_html(cfg),
             {"manual": "перевод с подтверждением", "demo": "демо, без списания", "stars": "Telegram Stars"}[
                 cfg.payment_mode
             ],
@@ -308,12 +311,12 @@ async def nav_buy_confirm(call: CallbackQuery, cfg: Config, service: OrderServic
 
 
 @router.callback_query(F.data == "nav:order")
-async def nav_order(call: CallbackQuery, cfg: Config) -> None:
+async def nav_order(call: CallbackQuery, cfg: Config, service: OrderService) -> None:
     order = await db.get_active_order(call.from_user.id)
     if not order:
         await call.answer("Заказов нет", show_alert=True)
         return
-    await _show_order(call.message, cfg, order)
+    await _show_order(call.message, cfg, order, service)
     await call.answer()
 
 

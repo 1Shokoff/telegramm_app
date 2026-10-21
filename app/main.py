@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 from aiohttp import web
 
-from . import db
+from . import db, texts
 from .api import build_app
 from .config import Config, load_config
 from .handlers import buyer, payments, seller, supplier
@@ -81,6 +81,30 @@ async def setup_profile(bot: Bot, cfg: Config) -> None:
         )
     else:
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
+PROFILE_CHECK = 600  # секунд: так часто сверяем, не началась ли и не кончилась ли акция
+
+
+async def keep_profile(bot: Bot, cfg: Config) -> None:
+    """Описание бота в профиле следует за акцией.
+
+    Акция кончается в полночь по Москве, без перезапуска бота, поэтому
+    состояние проверяем раз в десять минут и меняем описание только при смене.
+    Сбой Telegram не страшен: попробуем снова на следующей проверке.
+    """
+    shown: bool | None = None
+    while True:
+        active = cfg.promo_active()
+        if active != shown:
+            try:
+                await bot.set_my_description(description=texts.bot_description(cfg))
+                await bot.set_my_short_description(short_description=texts.bot_short_description(cfg))
+                shown = active
+                log.info("Описание бота обновлено: %s", "с акцией" if active else "без акции")
+            except Exception as exc:
+                log.warning("Не обновили описание бота: %s", exc)
+        await asyncio.sleep(PROFILE_CHECK)
 
 
 def mask_proxy(url: str) -> str:
@@ -208,12 +232,14 @@ async def run() -> None:
     polling = asyncio.create_task(
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     )
+    profile = asyncio.create_task(keep_profile(bot, cfg))
     waiter = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait({polling, waiter}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         log.info("Останавливаемся...")
         waiter.cancel()
+        profile.cancel()
         if not polling.done():
             await dp.stop_polling()
             await asyncio.gather(polling, return_exceptions=True)

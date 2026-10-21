@@ -40,8 +40,10 @@ def start_kb(cfg: Config, has_order: bool) -> InlineKeyboardMarkup:
     wa = webapp_button(cfg)
     if wa:
         first.append(wa)
+    # Во время акции кнопка напоминает о скидке — это главный повод нажать.
+    buy = "🔥 Оформить со скидкой −%d%%" % cfg.promo_percent if cfg.promo_active() else "Оформить заказ · весь каталог"
     second = [InlineKeyboardButton(text="Мой заказ", callback_data="nav:order")] if has_order else [
-        InlineKeyboardButton(text="Оформить заказ · весь каталог", callback_data="nav:buy")
+        InlineKeyboardButton(text=buy, callback_data="nav:buy")
     ]
     third = [
         InlineKeyboardButton(text="Каталог", callback_data="nav:catalog"),
