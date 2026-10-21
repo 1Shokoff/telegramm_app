@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
@@ -30,16 +30,30 @@ async def _show_order(target: Message, cfg: Config, order: dict, service: OrderS
     await target.answer(texts.buyer_order_card(order), reply_markup=keyboards.buyer_order_kb(cfg, order))
 
 
-async def _send_welcome(message: Message, text: str, kb: InlineKeyboardMarkup) -> None:
-    """Приветствие — картинка с подписью. Нет файла или Telegram её не принял — просто текст."""
+async def _send_welcome(
+    message: Message, text: str, kb: InlineKeyboardMarkup, effect: str | None = None
+) -> None:
+    """Приветствие — картинка с подписью. Нет файла или Telegram её не принял — просто текст.
+
+    effect — полноэкранный эффект Telegram (🔥 во время акции); не принят — шлём без него.
+    """
     photo = _photo_ids.get("welcome")
     if photo is None and WELCOME_PHOTO.is_file():
         photo = FSInputFile(WELCOME_PHOTO)
+    extra = {"message_effect_id": effect} if effect else {}
     if photo is None:
-        await message.answer(text, reply_markup=kb)
+        try:
+            await message.answer(text, reply_markup=kb, **extra)
+        except TelegramBadRequest:
+            await message.answer(text, reply_markup=kb)
         return
     try:
-        sent = await message.answer_photo(photo, caption=text, reply_markup=kb)
+        try:
+            sent = await message.answer_photo(photo, caption=text, reply_markup=kb, **extra)
+        except TelegramBadRequest:
+            if not effect:
+                raise
+            sent = await message.answer_photo(photo, caption=text, reply_markup=kb)
     except TelegramAPIError as exc:
         log.warning("Приветствие ушло без картинки: %s", exc)
         _photo_ids.pop("welcome", None)
@@ -58,6 +72,7 @@ async def cmd_start(message: Message, cfg: Config) -> None:
         message,
         texts.welcome(message.from_user.first_name, cfg, catalog.count()),
         keyboards.start_kb(cfg, has_open),
+        effect=const.EFFECT_FIRE if cfg.promo_active() else None,
     )
 
 

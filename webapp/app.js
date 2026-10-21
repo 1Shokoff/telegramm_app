@@ -61,6 +61,87 @@ function haptic(kind) {
 }
 
 let toastTimer = null;
+/* ------------------------------------------------------------- движение */
+
+// Системная настройка «уменьшить движение»: тогда ни конфетти, ни счётчиков.
+const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+/* Числа в карточках аналитики набегают от нуля. Итог сразу стоит в разметке —
+   без JS и при «уменьшить движение» он и остаётся. */
+function animateNumbers(root) {
+  root.querySelectorAll('[data-count]').forEach((el) => {
+    const target = Number(el.dataset.count) || 0;
+    const fmt = el.dataset.format;
+    const show = (v) => { el.textContent = fmt === 'rub' ? rub(v) : fmt === 'pct' ? v + '%' : String(v); };
+    if (REDUCED_MOTION || target <= 0) { show(target); return; }
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / 700);
+      show(Math.round(target * (1 - Math.pow(1 - t, 3))));
+      if (t < 1 && el.isConnected) requestAnimationFrame(step);
+    };
+    show(0);
+    requestAnimationFrame(step);
+  });
+}
+
+/* Конфетти — на важных шагах заказа: оплата подтверждена, всё готово. */
+function celebrate() {
+  haptic('success');
+  if (REDUCED_MOTION) return;
+  const box = document.createElement('div');
+  box.className = 'confetti';
+  box.setAttribute('aria-hidden', 'true');
+  const colors = ['#c8ff31', '#ffffff', '#30d158', '#ffd60a'];
+  for (let i = 0; i < 30; i++) {
+    const piece = document.createElement('span');
+    const angle = (Math.random() * 140 - 70) * Math.PI / 180;
+    const dist = 110 + Math.random() * 170;
+    piece.style.setProperty('--dx', Math.round(Math.sin(angle) * dist) + 'px');
+    piece.style.setProperty('--dy', Math.round(-Math.cos(angle) * dist) + 'px');
+    piece.style.setProperty('--rot', Math.round(Math.random() * 720 - 360) + 'deg');
+    piece.style.setProperty('--delay', Math.round(Math.random() * 140) + 'ms');
+    piece.style.background = colors[i % colors.length];
+    box.appendChild(piece);
+  }
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 2000);
+}
+
+/* Заказ продвинулся с прошлого раза, когда его видели на этом устройстве, —
+   празднуем. Первый показ заказа только запоминаем, без конфетти. */
+const SEEN_KEY = 'iapki.seen.v1';
+const STATUS_RANK = { new: 0, payment_check: 1, paid: 2, udid: 3, installed: 4, done: 5 };
+
+function watchMilestones() {
+  const order = state.boot && state.boot.order;
+  if (!order || state.public || state.view !== 'order') return;
+  let seen = {};
+  try { seen = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}') || {}; } catch (e) { seen = {}; }
+  const prev = seen[order.code];
+  if (prev === order.status) return;
+  delete seen[order.code];
+  seen[order.code] = order.status;
+  const codes = Object.keys(seen);
+  if (codes.length > 20) codes.slice(0, codes.length - 20).forEach((c) => delete seen[c]);
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(seen)); } catch (e) { /* без памяти — без праздника */ }
+  const before = prev === undefined ? undefined : STATUS_RANK[prev];
+  if (before !== undefined && STATUS_RANK[order.status] > before &&
+      (order.status === 'paid' || order.status === 'done')) {
+    setTimeout(celebrate, 250);
+  }
+}
+
+/* Кнопка копирования отвечает галочкой-вспышкой, а не только тостом. */
+function flashCopied(key) {
+  document.querySelectorAll('[data-action="copy:' + key + '"]').forEach((el) => {
+    el.classList.remove('copied');
+    void el.offsetWidth;
+    el.classList.add('copied');
+    setTimeout(() => el.classList.remove('copied'), 1200);
+  });
+}
+
 function toast(message, isError) {
   const el = document.getElementById('toast');
   el.textContent = message;
@@ -180,7 +261,7 @@ function priceHtml(priceText, oldPriceText) {
 
 function promoPill(promo) {
   if (!promo) return '';
-  return '<div class="promo-pill">🔥 ' + esc(promo.label) +
+  return '<div class="promo-pill"><span class="promo-flame" aria-hidden="true">🔥</span> ' + esc(promo.label) +
     (promo.untilText ? ' · ' + esc(promo.untilText) : '') + '</div>';
 }
 
@@ -512,8 +593,9 @@ function chatMessagesHtml() {
   if (!list.length) {
     return '<div class="chat-empty">Сообщений пока нет. Напишите первым — ответ придёт сюда и в чат бота.</div>';
   }
-  return list.map((m) => (
-    '<div class="msg' + (m.mine ? ' mine' : '') + '">' +
+  const shown = state.chat.shown || 0;
+  return list.map((m, i) => (
+    '<div class="msg' + (m.mine ? ' mine' : '') + (i >= shown ? ' msg-new' : '') + '">' +
       '<div class="msg-text">' + esc(m.text) + '</div>' +
       '<div class="msg-time">' + esc(timeOf(m.createdAt)) + '</div>' +
     '</div>'
@@ -586,6 +668,7 @@ function paintChat(scroll) {
   const list = document.getElementById('chatList');
   if (!list) return;
   list.innerHTML = chatMessagesHtml();
+  state.chat.shown = state.chat.messages.length;
   if (scroll !== false) window.scrollTo(0, document.body.scrollHeight);
 }
 
@@ -637,6 +720,7 @@ function openChat(orderId, title, from) {
   state.chat.title = title;
   state.chat.from = from || 'order';
   state.chat.messages = [];
+  state.chat.shown = 0;
   state.view = 'chat';
   render();
   guard(async () => {
@@ -1085,7 +1169,28 @@ function viewSellerOrder(o) {
     (o.status !== 'cancelled'
       ? '<button class="btn btn-danger btn-sm mt" data-action="seller-act:cancel">' +
         (o.status === 'done' ? 'Закрыть заказ' : 'Отменить заказ') + '</button>'
-      : '')
+      : '') +
+    // Удаление из базы — только из группы «Все»: там лежат старые и тестовые заказы.
+    (state.seller.status === 'all' ? deleteOrderBlock(o) : '')
+  );
+}
+
+/* Удалить заказ насовсем: вопрос на странице, как у «Закрыть заказ». */
+function deleteOrderBlock(o) {
+  if (!state.seller.confirmDelete) {
+    return '<button class="btn btn-ghost btn-sm mt danger-text" data-action="seller-delete">🗑 Удалить из базы</button>';
+  }
+  return (
+    '<div class="card confirm-box">' +
+      '<div class="confirm-title">Удалить заказ ' + esc(o.code) + ' из базы?</div>' +
+      '<div class="confirm-text">Вместе с ним удалятся переписка и история заказа. Вернуть их не получится.' +
+        (o.paid ? ' Оплата по заказу подтверждена — он пропадёт из продаж и выручки в аналитике.' : '') +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn btn-secondary" data-action="seller-delete-no">Оставить</button>' +
+        '<button class="btn btn-danger" data-action="seller-delete-yes">Удалить</button>' +
+      '</div>' +
+    '</div>'
   );
 }
 
@@ -1148,9 +1253,9 @@ function analyticsChart(series) {
   if (!points.some((p) => p.count)) return '';
   const max = Math.max.apply(null, points.map((p) => p.revenue)) || 1;
   const best = points.reduce((a, b) => (b.revenue > a.revenue ? b : a));
-  const bars = points.map((p) => {
+  const bars = points.map((p, i) => {
     const h = p.revenue ? Math.max(4, Math.round(p.revenue * 100 / max)) : 0;
-    return '<span class="bar' + (p.revenue ? '' : ' empty') + '" style="height:' + (h || 2) + '%" ' +
+    return '<span class="bar' + (p.revenue ? '' : ' empty') + '" style="--i:' + i + ';height:' + (h || 2) + '%" ' +
       'title="' + esc(pointLabel(p.label, series.unit) + ': ' + p.count + ' · ' + rub(p.revenue)) + '"></span>';
   }).join('');
   const mid = points[Math.floor(points.length / 2)];
@@ -1189,9 +1294,11 @@ function viewAnalytics() {
       (p.key === 'custom' ? 'Укажите даты периода.' : 'Загружаем…') + '</div>';
   }
 
-  const metric = (label, value) => (
+  const metric = (label, value, count, format) => (
     '<div class="metric"><div class="metric-label">' + esc(label) + '</div>' +
-      '<div class="metric-value">' + esc(value) + '</div></div>'
+      '<div class="metric-value"' +
+        (count != null ? ' data-count="' + count + '" data-format="' + (format || 'int') + '"' : '') + '>' +
+        esc(value) + '</div></div>'
   );
   const lost = r.cancelledAfterPaid;
   const statuses = r.statuses.map((st) => (
@@ -1204,10 +1311,10 @@ function viewAnalytics() {
     head +
     '<div class="muted an-dates">' + esc(r.period.datesText) + '</div>' +
     '<div class="metrics">' +
-      metric('Продажи', String(r.sales.count)) +
-      metric('Выручка', rub(r.sales.revenue)) +
-      metric('Средний чек', r.sales.count ? rub(r.sales.average) : '—') +
-      metric('Дошли до оплаты', r.created ? r.conversion + '%' : '—') +
+      metric('Продажи', String(r.sales.count), r.sales.count) +
+      metric('Выручка', rub(r.sales.revenue), r.sales.revenue, 'rub') +
+      metric('Средний чек', r.sales.count ? rub(r.sales.average) : '—', r.sales.count ? r.sales.average : null, 'rub') +
+      metric('Дошли до оплаты', r.created ? r.conversion + '%' : '—', r.created ? r.conversion : null, 'pct') +
     '</div>' +
     (lost.count
       ? '<div class="notice warn">Отменено после оплаты: ' + lost.count + ' на ' + rub(lost.revenue) +
@@ -1614,9 +1721,23 @@ function render() {
     root.classList.remove('view-in');
     void root.offsetWidth;
     root.classList.add('view-in');
+    // Класс снимаем, когда волна прошла: иначе она повторялась бы при каждой
+    // перерисовке того же экрана (галочка, фильтр, тост).
+    clearTimeout(viewInTimer);
+    viewInTimer = setTimeout(() => root.classList.remove('view-in'), 1200);
   }
   state.screen = key;
+  if (state.view !== lastTabView) {
+    const on = document.querySelector('#tabbar button.on');
+    if (on) on.classList.add('pop');
+    lastTabView = state.view;
+  }
+  animateNumbers(root);
+  watchMilestones();
 }
+
+let viewInTimer = null;
+let lastTabView = null;
 
 const TABS = ['home', 'order', 'about', 'seller', 'supplier'];
 
@@ -1691,7 +1812,23 @@ function bindScrollX(el) {
 /* Лента шагов инструкции — это страницы, а не ряд чипов: на экране один
    шаг, и короткого движения достаточно, чтобы пришёл следующий. Пальцем
    это делает сам браузер, мыши и клавиатуре помогаем здесь. */
+function markCurrentStep(el) {
+  const cards = Array.prototype.slice.call(el.children);
+  if (!cards.length || !('IntersectionObserver' in window)) return;
+  el.classList.add('paged');
+  cards[0].classList.add('is-current');
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+        cards.forEach((card) => card.classList.toggle('is-current', card === entry.target));
+      }
+    });
+  }, { root: el, threshold: [0.6] });
+  cards.forEach((card) => io.observe(card));
+}
+
 function bindPager(el) {
+  markCurrentStep(el);
   // Шаг ленты берём из разметки, чтобы не повторять зазор из стилей.
   const pageWidth = () => (
     el.children.length > 1
@@ -1946,7 +2083,7 @@ function copyValue(key) {
   }
   if (!text) return;
 
-  const done = () => toast('Скопировано');
+  const done = () => { toast('Скопировано'); flashCopied(key); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => {
       if (copyFallback(text)) done();
@@ -2229,6 +2366,26 @@ const actions = {
 
   'order-close-no': () => { state.confirmClose = false; render(); },
 
+  'seller-delete': () => {
+    state.seller.confirmDelete = true;
+    render();
+    const box = document.querySelector('.confirm-box');
+    if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+
+  'seller-delete-no': () => { state.seller.confirmDelete = false; render(); },
+
+  'seller-delete-yes': () => guard(async () => {
+    const current = state.seller.current;
+    if (!current) return;
+    const data = await api('/api/seller/action', { method: 'POST', body: { action: 'delete', orderId: current.id } });
+    state.seller.confirmDelete = false;
+    state.seller.current = null;
+    await loadSellerOrders();
+    toast('Заказ ' + data.code + ' удалён');
+    render();
+  }),
+
   'order-close-yes': () => guard(async () => {
     const data = await api('/api/order/cancel', {
       method: 'POST',
@@ -2308,7 +2465,7 @@ const actions = {
 
   'doc-back': () => { state.view = state.doc.from || 'about'; render(); },
 
-  'seller-back': () => { state.seller.current = null; render(); },
+  'seller-back': () => { state.seller.current = null; state.seller.confirmDelete = false; render(); },
 
   'supplier-back': () => { state.supplier.current = null; render(); },
 
@@ -2420,6 +2577,7 @@ function handleAction(raw) {
   }
   if (kind === 'seller-open') {
     state.seller.current = state.seller.orders.find((o) => String(o.id) === value) || null;
+    state.seller.confirmDelete = false;
     render();
     return;
   }

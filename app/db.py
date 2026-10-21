@@ -453,6 +453,25 @@ async def set_note(order_id: int, note: str) -> None:
     await conn().commit()
 
 
+async def delete_order(order_id: int, actor: str) -> dict | None:
+    """Продавец удаляет заказ из базы — например, старый или тестовый.
+
+    Переписка, история и настройки уведомлений по заказу уходят каскадом.
+    Сам факт удаления остаётся в журнале событий без привязки к заказу:
+    кто, когда и что удалил.
+    """
+    order = await get_order(order_id)
+    if not order:
+        return None
+    await conn().execute("DELETE FROM orders WHERE id = ?", (order_id,))
+    await conn().execute(
+        "INSERT INTO events (order_id, actor, type, detail, created_at) VALUES (NULL, ?, 'order_deleted', ?, ?)",
+        (actor, "%s · %s · %s ₽" % (order["code"], order["status"], order["price_rub"]), now()),
+    )
+    await conn().commit()
+    return order
+
+
 # Служебный покупатель, на которого переходят заказы после /forget.
 ANON_USER_ID = 0
 ANON_NAME = "Удалённый покупатель"

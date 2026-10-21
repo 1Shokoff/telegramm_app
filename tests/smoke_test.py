@@ -58,7 +58,8 @@ from tests import fixtures  # noqa: E402
 os.environ["IPA_DIR"] = str(fixtures.catalog_folder())
 
 from aiogram.exceptions import TelegramRetryAfter  # noqa: E402
-from aiogram.methods import SendDocument  # noqa: E402
+from aiogram.exceptions import TelegramBadRequest  # noqa: E402
+from aiogram.methods import SendDocument, SendMessage  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
@@ -88,9 +89,11 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
         self.files: list[tuple[int, str, str]] = []
+        self.effects: list[tuple[int, str | None]] = []
 
-    async def send_message(self, chat_id, text, reply_markup=None):
+    async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
         self.sent.append((chat_id, text))
+        self.effects.append((chat_id, kwargs.get("message_effect_id")))
         return None
 
     async def send_photo(self, chat_id, photo, caption=None, reply_markup=None):
@@ -1373,6 +1376,70 @@ async def test_analytics(cfg) -> None:
     check("повторный /forget — данных нет", await db.forget_user(810) == {"user": False, "orders": 0})
 
 
+class NoEffectBot(FakeBot):
+    """Клиент, где эффекты сообщений не поддерживаются: Telegram отвечает 400."""
+
+    async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
+        if kwargs.get("message_effect_id"):
+            raise TelegramBadRequest(method=SendMessage(chat_id=chat_id, text="x"), message="EFFECT_ID_INVALID")
+        return await super().send_message(chat_id, text, reply_markup=reply_markup)
+
+
+async def test_delete_and_effects(cfg) -> None:
+    print("\nУдаление заказа и эффекты")
+    bot = FakeBot()
+    svc = OrderService(bot, cfg)
+    await db.upsert_user(901, "u901", "Покупатель")
+    order, _ = await svc.get_or_create_order(901)
+    await svc.submit_receipt(order["id"], 901, Receipt(title="чек.jpg", file="f", kind="photo"))
+    await svc.post_message(order["id"], "Вопрос", 901, from_seller=False)
+
+    bot.sent.clear()
+    paid = await svc.confirm_payment(order["id"], "seller:%d" % SELLER)
+    check("«Оплата получена» — с конфетти", (901, const.EFFECT_CONFETTI) in bot.effects, str(bot.effects))
+    await svc.submit_udid(paid["id"], MODERN_UDID, 901)
+    bot.effects.clear()
+    await svc.send_instruction(paid["id"], "seller:%d" % SELLER)
+    check("инструкция — с конфетти", (901, const.EFFECT_CONFETTI) in bot.effects, str(bot.effects))
+
+    quiet = NoEffectBot()
+    plain = OrderService(quiet, cfg)
+    await db.upsert_user(902, "u902", "Покупатель")
+    other, _ = await plain.get_or_create_order(902)
+    await plain.submit_receipt(other["id"], 902, Receipt(title="чек.jpg", file="f", kind="photo"))
+    quiet.sent.clear()
+    await plain.confirm_payment(other["id"], "seller:%d" % SELLER)
+    check("эффект не принят — сообщение всё равно ушло",
+          any(cid == 902 and "Оплата получена" in t for cid, t in quiet.sent), str(quiet.sent)[:200])
+
+    app = build_app(cfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    seller = {"X-Init-Data": make_init_data(SELLER, "Продавец")}
+    try:
+        res = await client.post("/api/seller/action", json={"action": "delete", "orderId": other["id"]},
+                                headers={"X-Init-Data": make_init_data(902)})
+        check("покупатель удалить заказ не может", res.status == 403, str(res.status))
+        res = await client.post("/api/seller/action", json={"action": "delete", "orderId": order["id"]}, headers=seller)
+        data = await res.json()
+        check("продавец удалил заказ", res.status == 200 and data == {"deleted": True, "code": order["code"]}, str(data))
+        check("заказа в базе нет", await db.get_order(order["id"]) is None)
+        check("переписка удалена вместе с ним", await db.list_messages(order["id"]) == [])
+        left = await db._fetchone("SELECT COUNT(*) AS n FROM events WHERE order_id = ?", (order["id"],))
+        check("история заказа удалена", left["n"] == 0)
+        log_row = await db._fetchone(
+            "SELECT * FROM events WHERE type = 'order_deleted' AND order_id IS NULL ORDER BY id DESC LIMIT 1"
+        )
+        check("в журнале — кто и что удалил",
+              log_row and log_row["actor"] == "seller:%d" % SELLER and order["code"] in log_row["detail"], str(log_row))
+        res = await client.post("/api/seller/action", json={"action": "delete", "orderId": order["id"]}, headers=seller)
+        check("повторное удаление — 404", res.status == 404, str(res.status))
+        res = await client.get("/api/bootstrap", headers={"X-Init-Data": make_init_data(901)})
+        check("у покупателя удалённого заказа больше нет", (await res.json())["order"] is None)
+    finally:
+        await client.close()
+
+
 def bump(path: pathlib.Path, seconds: int) -> None:
     """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
     moment = time.time() + seconds
@@ -1557,6 +1624,7 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "analytics.sqlite3"))
     await test_analytics(cfg)
+    await test_delete_and_effects(cfg)
     await db.close()
     await test_migration(tmp)
 

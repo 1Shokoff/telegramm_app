@@ -105,6 +105,12 @@ ORDER_NOTIFY_DEFAULT = "default"
 ORDER_NOTIFY_ON = "on"
 ORDER_NOTIFY_OFF = "off"
 
+# Полноэкранные эффекты сообщений Telegram (Bot API 7.4+, только личные чаты).
+# Идентификаторы стандартных эффектов: клиент без поддержки покажет сообщение
+# без анимации, а если Telegram эффект отклонит, сообщение уйдёт без него.
+EFFECT_CONFETTI = "5046509860389126442"  # 🎉
+EFFECT_FIRE = "5104841245755180586"  # 🔥
+
 ORDER_NOTIFY_TITLES = {
     ORDER_NOTIFY_DEFAULT: "По общим настройкам",
     ORDER_NOTIFY_ON: "Всегда уведомлять",

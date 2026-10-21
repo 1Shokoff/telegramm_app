@@ -75,17 +75,23 @@ class OrderService:
         kb: InlineKeyboardMarkup | None = None,
         kind: str | None = None,
         order_id: int | None = None,
+        effect: str | None = None,
     ) -> bool:
         if not await self.allowed(chat_id, kind, order_id):
             log.info("Уведомление %s для %s отключено настройками", kind, chat_id)
             return False
+        extra = {"message_effect_id": effect} if effect else {}
         try:
-            await self.bot.send_message(chat_id, text, reply_markup=kb)
+            await self.bot.send_message(chat_id, text, reply_markup=kb, **extra)
             return True
         except TelegramForbiddenError:
             log.info("Пользователь %s заблокировал бота", chat_id)
             await db.set_blocked(chat_id, True)
         except TelegramBadRequest as exc:
+            if effect:
+                # Эффект — украшение: если Telegram его не принял, шлём без него.
+                log.info("Эффект %s не принят (%s), отправляем без него", effect, exc)
+                return await self.send(chat_id, text, kb, order_id=order_id)
             log.warning("Не отправили сообщение %s: %s", chat_id, exc)
         return False
 
@@ -155,13 +161,14 @@ class OrderService:
         merged["first_name"] = user.get("first_name")
         return merged
 
-    async def notify_buyer(self, order: dict, text: str, kind: str) -> None:
+    async def notify_buyer(self, order: dict, text: str, kind: str, effect: str | None = None) -> None:
         await self.send(
             order["user_id"],
             text,
             keyboards.buyer_order_kb(self.cfg, order),
             kind=kind,
             order_id=order["id"],
+            effect=effect,
         )
 
     # ------------------------------------------------------------- заказы
@@ -381,6 +388,7 @@ class OrderService:
             keyboards.buyer_order_kb(self.cfg, updated),
             kind=const.NOTIFY_STATUS,
             order_id=order_id,
+            effect=const.EFFECT_CONFETTI,
         )
         return updated
 
@@ -438,6 +446,7 @@ class OrderService:
             updated,
             texts.instruction_message(updated, self.cfg.webapp_enabled),
             const.NOTIFY_STATUS,
+            effect=const.EFFECT_CONFETTI,
         )
         return updated
 

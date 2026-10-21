@@ -221,6 +221,8 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         # Выполненный заказ, который покупатель убрал с экрана.
         "closed": bool(order.get("closed_at")),
         "isTest": bool(order.get("is_test")),
+        # Оплата подтверждалась — заказ входит в продажи, даже если потом отменён.
+        "paid": bool(order.get("paid_at")),
     }
     if full:
         data["udid"] = order.get("device_udid")
@@ -769,6 +771,13 @@ async def seller_action(request: web.Request) -> web.Response:
         order = await svc.send_instruction(order_id, actor)
     elif action == "cancel":
         order = await svc.cancel(order_id, actor, by_seller=True)
+    elif action == "delete":
+        # Удаление из базы насовсем: возвращаем только код, заказа больше нет.
+        deleted = await db.delete_order(order_id, actor)
+        if not deleted:
+            raise ApiError("Заказ не найден", status=404)
+        log.info("Продавец %s удалил заказ %s", user.id, deleted["code"])
+        return web.json_response({"deleted": True, "code": deleted["code"]})
     elif action == "note":
         await db.set_note(order_id, str(data.get("text", "")))
         order = await db.get_order(order_id)

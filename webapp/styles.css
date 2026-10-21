@@ -787,6 +787,7 @@ h2 .test-tag { font-size: 12px; }
 
 /* «Закрыть заказ?» — вопрос на месте кнопки вместо системного окна Telegram. */
 .confirm-box { margin-top: 10px; }
+.danger-text { color: var(--danger); }
 .confirm-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
 .confirm-text { color: var(--muted); font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
 
@@ -1141,15 +1142,17 @@ a.brand { text-decoration: none; color: inherit; }
 .btn-primary:active { box-shadow: 0 0 0 5px #c8ff312e, 0 6px 26px #c8ff3140; }
 
 /* Блик по главной кнопке идёт сам: на телефоне наведения курсора нет. */
-@keyframes sheen {
-  0%, 62% { background-position: 135% 0; }
-  100% { background-position: -35% 0; }
+.btn-primary::before {
+  content: "";
+  position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(110deg, transparent 36%, #ffffff4d 47%, transparent 58%);
+  transform: translateX(-110%);
+  animation: sheen-move 6s ease-in-out infinite;
+  pointer-events: none;
 }
-.btn-primary {
-  background-image: linear-gradient(110deg, transparent 36%, #ffffff4d 47%, transparent 58%);
-  background-size: 280% 100%;
-  background-position: 135% 0;
-  animation: sheen 6s ease-in-out infinite;
+@keyframes sheen-move {
+  0%, 62% { transform: translateX(-110%); }
+  100% { transform: translateX(110%); }
 }
 
 /* Иконки в шапке витрины качаются, каждая со своей задержкой. */
@@ -1222,6 +1225,127 @@ a.brand { text-decoration: none; color: inherit; }
 }
 .filters.dragging, .stepper.dragging { cursor: grabbing; user-select: none; }
 .filters.dragging .chip { pointer-events: none; }
+
+/* Волна при входе на экран: строки списков, таймлайн, реквизиты, карточки
+   показателей поднимаются по очереди. Класс view-in живёт ~1 с после смены
+   экрана, поэтому перерисовка того же экрана волну не повторяет. */
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+.view-in :is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot, .instr-dev) {
+  animation: rise .45s cubic-bezier(.2, .7, .3, 1) both;
+  animation-delay: calc(var(--n, 0) * 55ms);
+}
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(2) { --n: 1; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(3) { --n: 2; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(4) { --n: 3; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(5) { --n: 4; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(6) { --n: 5; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(7) { --n: 6; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(8) { --n: 7; }
+:is(.tl, .order-line, .doc-row, .req-row, .metric, .stat-row, .instr-bot):nth-child(n + 9) { --n: 8; }
+
+/* Плашка статуса заказа выскакивает пружинкой. */
+@keyframes pill-pop { from { opacity: 0; transform: scale(.8); } }
+.view-in .pill { animation: pill-pop .5s cubic-bezier(.2, 1.5, .4, 1) both; }
+
+/* Таймлайн заказа: пройденные шаги соединены линией, которая «прорастает»
+   вниз, галочки выскакивают, текущий шаг пульсирует кольцом. */
+.tl { position: relative; }
+.tl:not(:last-child)::before {
+  content: "";
+  position: absolute; left: 12px; top: 40px; bottom: -10px;
+  width: 2px; border-radius: 2px;
+  background: var(--line);
+}
+.tl.done:not(:last-child)::before { background: var(--ok); }
+@keyframes line-fill { from { transform: scaleY(0); } }
+.view-in .tl.done:not(:last-child)::before {
+  transform-origin: top;
+  animation: line-fill .5s ease-out both;
+  animation-delay: calc(var(--n, 0) * 90ms + 180ms);
+}
+@keyframes dot-pop { from { opacity: 0; transform: scale(.4); } }
+.view-in .tl.done .dot { animation: dot-pop .45s cubic-bezier(.2, 1.6, .4, 1) both; animation-delay: calc(var(--n, 0) * 90ms); }
+.tl.active .dot { position: relative; }
+.tl.active .dot::after {
+  content: "";
+  position: absolute; inset: -1px; border-radius: 50%;
+  border: 2px solid var(--accent);
+  animation: ring 2.2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes ring { from { opacity: .7; transform: scale(1); } to { opacity: 0; transform: scale(1.9); } }
+
+/* Текущий этап в ленте шагов мягко светится. */
+@keyframes chip-glow { 50% { box-shadow: 0 0 0 5px #c8ff3126, 0 6px 22px #c8ff3133; } }
+.stepper .chip.active { animation: chip-glow 2.6s ease-in-out infinite; }
+
+/* Акция: ярлык «дышит», огонёк горит, старая цена зачёркивается на глазах. */
+@keyframes promo-glow { 50% { box-shadow: 0 0 0 6px #c8ff3122, 0 8px 26px #c8ff3140; } }
+.promo-pill { animation: promo-glow 2.8s ease-in-out infinite; }
+.promo-flame { display: inline-block; transform-origin: 50% 85%; animation: flame 1.6s ease-in-out infinite; }
+@keyframes flame {
+  0%, 100% { transform: rotate(-7deg) scale(1); }
+  50% { transform: rotate(7deg) scale(1.14); }
+}
+.old-price {
+  text-decoration: none;
+  background: linear-gradient(currentColor, currentColor) no-repeat 0 56% / 100% 1.5px;
+}
+@keyframes strike { from { background-size: 0 1.5px; } }
+.view-in .old-price { animation: strike .5s .35s ease-out both; }
+
+/* Аналитика: столбики вырастают слева направо, полоски статусов — тоже. */
+@keyframes bar-grow { from { transform: scaleY(0); } }
+.chart .bar {
+  transform-origin: bottom;
+  animation: bar-grow .65s cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: calc(var(--i, 0) * 14ms);
+}
+@keyframes bar-grow-x { from { transform: scaleX(0); } }
+.stat-bar span { transform-origin: left; animation: bar-grow-x .8s cubic-bezier(.2, .8, .2, 1) .15s both; }
+
+/* Нижние вкладки: выбранная иконка подпрыгивает. */
+@keyframes tab-pop {
+  0% { transform: scale(.82); }
+  60% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+.tabbar button.pop .nav-icon { animation: tab-pop .45s cubic-bezier(.2, 1.6, .4, 1); }
+
+/* Тост выезжает с лёгкой пружинкой. */
+.toast { transition: opacity .2s ease, transform .38s cubic-bezier(.2, 1.4, .4, 1); transform: translate(-50%, 20px) scale(.96); }
+.toast.show { transform: translate(-50%, 0) scale(1); }
+
+/* Раскрытие «Что входит в услугу» и других подсказок — плавно. */
+details.disclosure[open] > :not(summary) { animation: rise .3s ease-out both; }
+
+/* Копирование: кнопка вспыхивает зелёным, UDID — салатовым. */
+@keyframes copy-pop { 40% { transform: scale(1.22); } }
+.req-copy.copied { color: var(--ok); border-color: var(--ok); animation: copy-pop .4s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes copy-flash { 0%, 30% { color: var(--accent); } }
+.copyable.copied { animation: copy-flash .9s ease; }
+
+/* Переписка: новое сообщение въезжает со своей стороны. */
+@keyframes msg-in { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+.msg.msg-new { animation: msg-in .3s cubic-bezier(.2, .8, .3, 1) both; transform-origin: bottom left; }
+.msg.mine.msg-new { transform-origin: bottom right; }
+
+/* Лента инструкции: текущий шаг крупно, соседние чуть меньше и тише. */
+.instr-steps.paged .instr-card { transition: transform .35s ease, opacity .35s ease; }
+.instr-steps.paged .instr-card:not(.is-current) { transform: scale(.94); opacity: .5; }
+
+/* Конфетти на важных шагах заказа — веер вверх, потом вниз. */
+.confetti { position: fixed; left: 50%; top: 42%; width: 0; height: 0; pointer-events: none; z-index: 80; }
+.confetti span {
+  position: absolute; width: 8px; height: 12px; border-radius: 2px;
+  opacity: 0;
+  animation: confetti 1.5s cubic-bezier(.15, .7, .3, 1) var(--delay, 0ms) forwards;
+}
+@keyframes confetti {
+  0% { opacity: 1; transform: translate(0, 0) rotate(0deg) scale(.6); }
+  45% { opacity: 1; transform: translate(calc(var(--dx) * .7), var(--dy)) rotate(calc(var(--rot) * .5)) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), calc(var(--dy) + 320px)) rotate(var(--rot)) scale(1); }
+}
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 

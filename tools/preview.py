@@ -33,7 +33,7 @@ PORT = int(os.getenv("PREVIEW_PORT", "8099"))
 
 
 class ConsoleBot:
-    async def send_message(self, chat_id, text, reply_markup=None):
+    async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
         print("\n[в Telegram → %s]\n%s\n" % (chat_id, text))
 
     async def send_photo(self, chat_id, photo, caption=None, reply_markup=None):
