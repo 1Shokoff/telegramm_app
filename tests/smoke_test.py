@@ -62,9 +62,9 @@ from aiogram.methods import SendDocument  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, texts, udid as udid_mod  # noqa: E402
+from app import analytics, auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, texts, udid as udid_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
-from app.config import load_config, today_msk  # noqa: E402
+from app.config import MSK, load_config, today_msk  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
 
 SPACED_UDID = "2b6f0cc904d137be2e17 30235f5664094b831186"
@@ -1236,6 +1236,143 @@ async def test_promo(cfg) -> None:
                 os.environ[key] = value
 
 
+async def test_analytics(cfg) -> None:
+    """Продажи — по дате подтверждения оплаты, по Москве; тестовые и демо не считаются."""
+    print("\nАналитика")
+    today = today_msk()
+
+    def at(day: date, hour: int = 12, minute: int = 0) -> str:
+        """Момент по Москве → формат базы (UTC ISO)."""
+        moment = datetime.combine(day, datetime.min.time().replace(hour=hour, minute=minute), tzinfo=MSK)
+        return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    async def make(uid, created, paid=None, status=const.NEW, price=1500, test=False, mode="manual"):
+        await db.upsert_user(uid, "u%d" % uid, "Покупатель %d" % uid)
+        order = await db.create_order(uid, price, mode, "NP", None, is_test=test)
+        await db.conn().execute(
+            "UPDATE orders SET created_at = ?, paid_at = ?, status = ? WHERE id = ?",
+            (created, paid, status, order["id"]),
+        )
+        await db.conn().commit()
+        return order["id"]
+
+    d = lambda n: today - timedelta(days=n)  # noqa: E731
+    await make(801, at(d(3)), at(d(2)), const.DONE, 3000)
+    await make(802, at(today), at(today), const.UDID, 1500)
+    await make(803, at(d(10)), at(d(9)), const.CANCELLED, 1500)  # отменён после оплаты
+    await make(804, at(today), None, const.NEW, 1500)
+    await make(805, at(d(5)), None, const.CANCELLED, 3000)  # отменён до оплаты
+    await make(806, at(today), at(today), const.DONE, 1500, test=True)
+    await make(807, at(today), at(today), const.DONE, 1500, mode="demo")
+    await make(808, at(d(40)), at(d(40)), const.DONE, 3000)
+
+    r = await analytics.report(analytics.period("today"))
+    check("сегодня: одна продажа на 1 500 ₽", (r["sales"]["count"], r["sales"]["revenue"]) == (1, 1500), str(r["sales"]))
+    check("тестовые и демо не считаются ни в продажах, ни в заказах", r["created"] == 2, str(r["created"]))
+    st = {s["status"]: (s["count"], s["percent"]) for s in r["statuses"]}
+    check("статусы за день с долями", st == {const.NEW: (1, 50), const.UDID: (1, 50)}, str(st))
+    check("до оплаты дошла половина", r["conversion"] == 50)
+
+    r = await analytics.report(analytics.period("7d"))
+    check("7 дней: две продажи на 4 500 ₽", (r["sales"]["count"], r["sales"]["revenue"]) == (2, 4500), str(r["sales"]))
+    check("средний чек", r["sales"]["average"] == 2250)
+    st = {s["status"]: s["count"] for s in r["statuses"]}
+    check("отменённый до оплаты — своей строкой", st.get(const.CANCELLED) == 1 and "cancelled_paid" not in st, str(st))
+    check("график по дням — 7 точек, сумма как в продажах",
+          r["series"]["unit"] == "day" and len(r["series"]["points"]) == 7
+          and sum(p["count"] for p in r["series"]["points"]) == 2, str(r["series"])[:200])
+
+    r = await analytics.report(analytics.period("30d"))
+    check("30 дней: три продажи вместе с отменённой после оплаты", r["sales"]["count"] == 3 and r["sales"]["revenue"] == 6000)
+    check("отменено после оплаты — отдельно", r["cancelledAfterPaid"] == {"count": 1, "revenue": 1500})
+    check("без отменённых", r["net"] == {"count": 2, "revenue": 4500})
+    st = {s["status"]: s["title"] for s in r["statuses"]}
+    check("в статусах «Отменено после оплаты»", st.get("cancelled_paid") == "Отменено после оплаты", str(st))
+
+    r = await analytics.report(analytics.period("all"))
+    check("всё время: четыре продажи на 9 000 ₽", (r["sales"]["count"], r["sales"]["revenue"]) == (4, 9000))
+    check("график за всё время — от первой продажи до сегодня",
+          r["series"]["points"] and r["series"]["points"][0]["label"] == d(40).isoformat()
+          and r["series"]["points"][-1]["label"] == today.isoformat(), str(r["series"])[:120])
+
+    r = await analytics.report(analytics.period("custom", d(10), d(9)))
+    check("свои даты", r["sales"]["count"] == 1 and r["period"]["key"] == "custom")
+
+    # Оплата в 00:30 по Москве — это уже сегодня, хотя в UTC ещё вчера.
+    before = (await analytics.report(analytics.period("today")))["sales"]["count"]
+    await make(809, at(today, 0, 30), at(today, 0, 30), const.DONE, 1500)
+    after = (await analytics.report(analytics.period("today")))["sales"]["count"]
+    check("сутки считаются по Москве", after == before + 1)
+
+    # Разбор периода в /stats.
+    p = analytics.period_from_text
+    check("/stats без периода — всё время", p("").key == "all")
+    check("слова периода", p("7d").key == "7d" and p("сегодня").key == "today" and p("месяц").key == "month")
+    rng = p("01.10-20.10", today=date(2026, 10, 21))
+    check("даты без года — текущий год", (rng.start, rng.end) == (date(2026, 10, 1), date(2026, 10, 20)))
+    rng = p("01.10.2025-20.10.2025")
+    check("даты с годом", (rng.start, rng.end) == (date(2025, 10, 1), date(2025, 10, 20)))
+    rng = p("2026-10-01..2026-10-20")
+    check("даты ISO", (rng.start, rng.end) == (date(2026, 10, 1), date(2026, 10, 20)))
+    check("один день", p("20.10.2026").start == p("20.10.2026").end == date(2026, 10, 20))
+    check("перепутанные даты меняются местами", p("20.10.2026-01.10.2026").start == date(2026, 10, 1))
+    for bad in ("вчера", "32.10.2026", "01.10-20.10-30.10"):
+        try:
+            p(bad)
+            check("кривой период «%s» — ошибка" % bad, False)
+        except analytics.PeriodError:
+            check("кривой период «%s» — ошибка" % bad, True)
+
+    # API — только продавцу.
+    bot = FakeBot()
+    svc = OrderService(bot, cfg)
+    app = build_app(cfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        url = "/api/seller/analytics"
+        res = await client.get(url, params={"period": "30d"}, headers={"X-Init-Data": make_init_data(SELLER, "Продавец")})
+        data = await res.json()
+        check("продавцу отчёт", res.status == 200 and data["sales"]["count"] == 4, str(data)[:200])
+        for who, name in ((801, "покупателю"), (SUPPLIER, "поставщику")):
+            res = await client.get(url, headers={"X-Init-Data": make_init_data(who)})
+            check("%s аналитика закрыта" % name, res.status == 403, str(res.status))
+        res = await client.get(url, params={"period": "custom", "from": "2026-10-01", "to": "2026-10-20"},
+                               headers={"X-Init-Data": make_init_data(SELLER, "Продавец")})
+        check("свои даты через API", res.status == 200 and (await res.json())["period"]["from"] == "2026-10-01")
+        for bad in ({"period": "year"}, {"period": "custom"}, {"period": "custom", "from": "вчера"}):
+            res = await client.get(url, params=bad, headers={"X-Init-Data": make_init_data(SELLER, "Продавец")})
+            check("кривой период в API — 400 (%s)" % bad, res.status == 400, str(res.status))
+    finally:
+        await client.close()
+
+    # /forget обезличивает: продажи остаются, данные покупателя — нет.
+    before = (await analytics.report(analytics.period("all")))["sales"]
+    oid = await make(810, at(today), at(today), const.UDID, 1500)
+    await db.set_udid(oid, MODERN_UDID, "user:810")
+    await db.set_note(oid, "Позвонить Ивану")
+    await db.add_message(oid, db.BUYER, 810, "Мой номер +7 900 111-22-33")
+    await db.add_event(oid, "user:810", "receipt", "чек Иванов.pdf")
+    await db.set_notify_pref(810, const.NOTIFY_STATUS, False)
+    result = await db.forget_user(810)
+    order = await db.get_order(oid)
+    check("заказ остался и перешёл на удалённого покупателя",
+          result == {"user": True, "orders": 1} and order["user_id"] == db.ANON_USER_ID)
+    check("UDID и заметка стёрты", order["device_udid"] is None and order["seller_note"] is None)
+    check("сумма, даты и статус остались", order["price_rub"] == 1500 and order["paid_at"] and order["status"] == const.UDID)
+    check("переписка удалена", await db.list_messages(oid) == [])
+    events = await db.list_events(oid)
+    check("в журнале нет Telegram ID и записей о чеках",
+          all("810" not in (ev["actor"] or "") for ev in events) and not any(ev["type"] == "receipt" for ev in events),
+          str([(ev["actor"], ev["type"]) for ev in events]))
+    check("в журнале отмечено обезличивание", any(ev["type"] == "forget" for ev in events))
+    check("пользователь и его настройки удалены",
+          await db.get_user(810) is None and await db.get_notify_prefs(810) == {})
+    after = (await analytics.report(analytics.period("all")))["sales"]
+    check("продажа осталась в аналитике", after["count"] == before["count"] + 1)
+    check("повторный /forget — данных нет", await db.forget_user(810) == {"user": False, "orders": 0})
+
+
 def bump(path: pathlib.Path, seconds: int) -> None:
     """Сдвигает время файла: бот показывает самую свежую сборку приложения."""
     moment = time.time() + seconds
@@ -1417,6 +1554,9 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "promo.sqlite3"))
     await test_promo(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "analytics.sqlite3"))
+    await test_analytics(cfg)
     await db.close()
     await test_migration(tmp)
 

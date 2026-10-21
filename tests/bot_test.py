@@ -481,7 +481,17 @@ async def main() -> int:
     await dp.feed_update(bot, message_update(SELLER, "/find %s" % order["code"]))
     check("/find находит заказ", any(order["code"] in t for t in bot.texts_to(SELLER)))
     await dp.feed_update(bot, message_update(SELLER, "/stats"))
-    check("/stats отвечает", any("статус" in t.lower() for t in bot.texts_to(SELLER)))
+    check("/stats — аналитика за всё время",
+          any("Аналитика · Всё время" in t and "Продаж" in t for t in bot.texts_to(SELLER)), str(bot.texts_to(SELLER))[-300:])
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/stats 7d"))
+    check("/stats 7d", any("Аналитика · 7 дней" in t for t in bot.texts_to(SELLER)))
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/stats вчера"))
+    check("кривой период — подсказка", any("/stats today" in t for t in bot.texts_to(SELLER)), str(bot.texts_to(SELLER)))
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/stats"))
+    check("покупателю /stats не отвечает аналитикой", not any("Аналитика" in t for t in bot.texts_to(BUYER)))
 
     print("\nУведомления")
     bot.reset()
@@ -508,7 +518,11 @@ async def main() -> int:
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/forget"))
     check("данные удалены", await db.get_user(BUYER) is None)
-    check("заказы удалены каскадом", await db.get_active_order(BUYER) is None)
+    check("у покупателя заказов больше нет", await db.get_active_order(BUYER) is None)
+    kept = await db._fetchall("SELECT * FROM orders WHERE user_id = ?", (db.ANON_USER_ID,))
+    check("заказы обезличены, а не удалены", bool(kept) and all(o["device_udid"] is None for o in kept))
+    check("покупателю сказали, что осталось в учёте",
+          any("номер заказа, сумма и даты" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
     check("настройки уведомлений удалены", await db.get_notify_prefs(BUYER) == {})
 
     await db.close()

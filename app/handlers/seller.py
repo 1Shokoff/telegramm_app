@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from .. import const, db, keyboards, texts
+from .. import analytics, const, db, keyboards, texts
 from ..config import Config
 from ..service import OrderService, ServiceError
 
@@ -71,24 +71,14 @@ async def cmd_orders(message: Message, command: CommandObject) -> None:
 
 
 @router.message(Command("stats"))
-async def cmd_stats(message: Message) -> None:
-    counts = await db.status_counts()
-    if not counts:
-        await message.answer("Пока пусто.")
+async def cmd_stats(message: Message, command: CommandObject) -> None:
+    """Аналитика продаж: /stats, /stats 7d, /stats month, /stats 01.10-20.10."""
+    try:
+        period = analytics.period_from_text(command.args or "")
+    except analytics.PeriodError as exc:
+        await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.STATS_PERIODS_HINT))
         return
-    lines = ["<b>Заказы по статусам</b>"]
-    total = 0
-    for status, title in const.TITLES.items():
-        n = counts.get(status, 0)
-        total += n
-        if n:
-            lines.append("%s — %d" % (title, n))
-    lines.append("")
-    lines.append("Всего: %d" % total)
-    tests = await db.count_test_orders()
-    if tests:
-        lines.append("🧪 Тестовых, не входят в счёт: %d" % tests)
-    await message.answer("\n".join(lines))
+    await message.answer(texts.analytics_text(await analytics.report(period)))
 
 
 @router.message(Command("find"))
@@ -179,7 +169,7 @@ async def cmd_sellerhelp(message: Message) -> None:
         "/reply NP-0001 текст — ответить покупателю\n"
         "/log NP-0001 — история заказа\n"
         "/note NP-0001 текст — заметка к заказу\n"
-        "/stats — счётчики по статусам\n\n"
+        "/stats — продажи и выручка: /stats 7d, /stats month, /stats 01.10-20.10\n\n"
         "Действия по заказу — кнопками под карточкой."
     )
 

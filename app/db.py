@@ -453,16 +453,53 @@ async def set_note(order_id: int, note: str) -> None:
     await conn().commit()
 
 
-async def purge_user(user_id: int) -> int:
-    """Удаляет пользователя вместе с заказами — по команде /forget.
+# Служебный покупатель, на которого переходят заказы после /forget.
+ANON_USER_ID = 0
+ANON_NAME = "Удалённый покупатель"
 
-    Заказы, сообщения и настройки по заказам уходят каскадом, общие
-    настройки уведомлений связаны с пользователем только по id — их чистим сами.
+
+async def forget_user(user_id: int) -> dict:
+    """Обезличивает покупателя по команде /forget.
+
+    Заказы целиком не удаляем: без них пропадут продажи и выручка в аналитике.
+    Заказ переходит на служебного «Удалённого покупателя», из него стираются
+    UDID, заметка продавца и ссылка на платёж, удаляются переписка и записи
+    о чеках (в них имена файлов и ссылки), а Telegram ID покупателя уходит
+    и из журнала событий. Остаются номер, сумма, даты и статусы.
+    Сам пользователь и его настройки удаляются.
     """
-    cur = await conn().execute("DELETE FROM users WHERE tg_id = ?", (user_id,))
+    ts = now()
+    rows = await _fetchall("SELECT id FROM orders WHERE user_id = ?", (user_id,))
+    ids = [row["id"] for row in rows]
+    if ids:
+        marks = ",".join("?" * len(ids))
+        await conn().execute(
+            "INSERT OR IGNORE INTO users (tg_id, username, first_name, created_at, updated_at) "
+            "VALUES (?, NULL, ?, ?, ?)",
+            (ANON_USER_ID, ANON_NAME, ts, ts),
+        )
+        await conn().execute("DELETE FROM messages WHERE order_id IN (%s)" % marks, ids)
+        await conn().execute(
+            "DELETE FROM events WHERE order_id IN (%s) AND type IN ('receipt', 'message')" % marks, ids
+        )
+        await conn().execute(
+            "UPDATE events SET actor = ? WHERE order_id IN (%s) AND actor = ?" % marks,
+            ["user:%d" % ANON_USER_ID, *ids, "user:%d" % user_id],
+        )
+        await conn().execute(
+            "UPDATE orders SET user_id = ?, device_udid = NULL, seller_note = NULL, instruction = NULL, "
+            "payment_ref = NULL, updated_at = ? WHERE id IN (%s)" % marks,
+            [ANON_USER_ID, ts, *ids],
+        )
+        await conn().executemany(
+            "INSERT INTO events (order_id, actor, type, detail, created_at) VALUES (?, 'system', 'forget', ?, ?)",
+            [(oid, "данные покупателя обезличены по /forget", ts) for oid in ids],
+        )
+    await conn().execute("DELETE FROM notify_order_prefs WHERE user_id = ?", (user_id,))
     await conn().execute("DELETE FROM notify_prefs WHERE user_id = ?", (user_id,))
+    cur = await conn().execute("DELETE FROM users WHERE tg_id = ?", (user_id,))
     await conn().commit()
-    return cur.rowcount or 0
+    return {"user": bool(cur.rowcount), "orders": len(ids)}
 
 
 # --------------------------------------------------------------- events

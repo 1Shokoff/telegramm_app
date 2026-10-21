@@ -30,6 +30,39 @@ def promo_line(cfg: Config) -> str:
     return "🔥 <b>%s</b>%s" % (e(cfg.promo_title), tail)
 
 
+STATS_PERIODS_HINT = "Период: /stats today · 7d · 30d · month · all · 01.10-20.10"
+
+
+def analytics_text(r: dict) -> str:
+    """Сводка /stats для продавца — из analytics.report."""
+    p, s = r["period"], r["sales"]
+    lines = ["<b>Аналитика · %s</b>" % e(p["title"]), "<i>%s</i>" % e(p["datesText"]), ""]
+    if s["count"]:
+        lines.append("Продаж: <b>%d</b> на <b>%s</b>" % (s["count"], money(s["revenue"])))
+        lines.append("Средний чек: %s" % money(s["average"]))
+        lost = r["cancelledAfterPaid"]
+        if lost["count"]:
+            lines.append("Отменено после оплаты: %d на %s" % (lost["count"], money(lost["revenue"])))
+            lines.append("Без отменённых: %d на %s" % (r["net"]["count"], money(r["net"]["revenue"])))
+    else:
+        lines.append("Продаж за период нет.")
+    lines.append("")
+    if r["created"]:
+        lines.append("<b>Заказы за период по статусам</b> · оформлено %d" % r["created"])
+        for st in r["statuses"]:
+            lines.append("%s — %d (%d%%)" % (e(st["title"]), st["count"], st["percent"]))
+        lines.append("Дошли до оплаты: %d%%" % r["conversion"])
+    else:
+        lines.append("Новых заказов за период нет.")
+    lines.append("")
+    lines.append(
+        "<i>Продажа — заказ с подтверждённой оплатой, по дате подтверждения. "
+        "Тестовые заказы не учитываются.</i>"
+    )
+    lines.append(STATS_PERIODS_HINT)
+    return "\n".join(lines)
+
+
 def bot_description(cfg: Config) -> str:
     """Текст профиля бота до нажатия «Старт» (обычный текст, до 512 знаков)."""
     text = (
@@ -555,5 +588,6 @@ CHAT_HINT_BUYER = (
 PRIVACY = (
     "UDID нужен только для выпуска сертификата под ваше устройство. "
     "Он виден продавцу и хранится до закрытия заказа. "
-    "Команда /forget удаляет ваши заказы и UDID из базы бота."
+    "Команда /forget удаляет ваши данные — имя, UDID и переписку; в учёте продаж "
+    "остаются только номер заказа, сумма и даты."
 )

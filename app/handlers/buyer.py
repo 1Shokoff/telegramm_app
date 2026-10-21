@@ -175,9 +175,14 @@ async def cb_notify_order(call: CallbackQuery, cfg: Config) -> None:
 
 @router.message(Command("forget"))
 async def cmd_forget(message: Message) -> None:
-    removed = await db.purge_user(message.from_user.id)
-    if removed:
-        await message.answer("Ваши заказы и UDID удалены из базы бота.")
+    result = await db.forget_user(message.from_user.id)
+    if result["orders"]:
+        await message.answer(
+            "Ваши данные удалены: имя, UDID и переписка. В учёте продаж остались только "
+            "номер заказа, сумма и даты — без связи с вами."
+        )
+    elif result["user"]:
+        await message.answer("Ваши данные удалены из базы бота.")
     else:
         await message.answer("В базе нет ваших данных.")
 

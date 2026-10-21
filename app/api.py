@@ -9,6 +9,7 @@ from aiogram.types import BufferedInputFile
 from aiohttp import web
 
 from . import (
+    analytics,
     auth,
     catalog,
     const,
@@ -732,6 +733,23 @@ async def seller_orders(request: web.Request) -> web.Response:
             "unreadTotal": sum(unread_real.values()),
         }
     )
+
+
+@routes.get("/api/seller/analytics")
+async def seller_analytics(request: web.Request) -> web.Response:
+    """Продажи и выручка за период — только продавцу.
+
+    period=today|7d|30d|month|all, либо period=custom с from/to (2026-10-20).
+    """
+    await require_seller(request)
+    key = request.query.get("period") or "all"
+    try:
+        start = analytics.parse_date(request.query["from"]) if request.query.get("from") else None
+        end = analytics.parse_date(request.query["to"]) if request.query.get("to") else None
+        period = analytics.period(key, start, end)
+    except analytics.PeriodError as exc:
+        raise ApiError(str(exc))
+    return web.json_response(await analytics.report(period))
 
 
 @routes.post("/api/seller/action")

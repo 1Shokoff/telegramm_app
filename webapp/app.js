@@ -25,6 +25,8 @@ const state = {
   seller: {
     status: 'open', q: '', orders: [], counts: {}, current: null,
     total: 0, titles: {}, prefs: null, panel: false,
+    // mode — «Заказы» или «Аналитика»; analytics — последний отчёт, period — выбранный период.
+    mode: 'orders', analytics: null, period: null,
   },
   supplier: { orders: [], current: null },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
@@ -1087,15 +1089,150 @@ function viewSellerOrder(o) {
   );
 }
 
+/* ------------------------------------------------------------ аналитика */
+
+const ANALYTICS_PERIODS = [
+  ['today', 'Сегодня'], ['7d', '7 дней'], ['30d', '30 дней'],
+  ['month', 'Этот месяц'], ['all', 'Всё время'], ['custom', 'Свои даты'],
+];
+const ANALYTICS_KEY = 'iapki.analytics.period.v1';
+
+function rub(n) {
+  return new Intl.NumberFormat('ru-RU').format(n || 0) + ' ₽';
+}
+
+/* Выбранный период помнит устройство продавца, как и фильтры заказов. */
+function analyticsPeriod() {
+  const s = state.seller;
+  if (!s.period) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ANALYTICS_KEY) || 'null'); } catch (e) { saved = null; }
+    s.period = Object.assign({ key: 'all', from: '', to: '' }, saved || {});
+  }
+  return s.period;
+}
+
+function saveAnalyticsPeriod() {
+  try { localStorage.setItem(ANALYTICS_KEY, JSON.stringify(state.seller.period)); } catch (e) { /* без памяти — до закрытия */ }
+}
+
+async function loadAnalytics() {
+  const p = analyticsPeriod();
+  const params = new URLSearchParams({ period: p.key });
+  if (p.key === 'custom') {
+    // Без дат «свои даты» ничего не выбирают — ждём, пока продавец их укажет.
+    if (!p.from && !p.to) { state.seller.analytics = null; return; }
+    if (p.from) params.set('from', p.from);
+    if (p.to) params.set('to', p.to);
+  }
+  state.seller.analytics = await api('/api/seller/analytics?' + params.toString());
+}
+
+function sellerModeSwitch() {
+  const mode = state.seller.mode;
+  const btn = (key, label) => (
+    '<button class="seg-btn' + (mode === key ? ' active' : '') + '" data-action="seller-mode:' + key + '" ' +
+      'aria-pressed="' + (mode === key) + '">' + label + '</button>'
+  );
+  return '<div class="seg">' + btn('orders', 'Заказы') + btn('analytics', 'Аналитика') + '</div>';
+}
+
+function pointLabel(label, unit) {
+  const parts = label.split('-');
+  return unit === 'day' ? parts[2] + '.' + parts[1] : parts[1] + '.' + parts[0];
+}
+
+/* Столбики выручки: высота — доля от лучшего дня (месяца), подписи — по краям и в середине. */
+function analyticsChart(series) {
+  const points = series.points || [];
+  if (!points.some((p) => p.count)) return '';
+  const max = Math.max.apply(null, points.map((p) => p.revenue)) || 1;
+  const best = points.reduce((a, b) => (b.revenue > a.revenue ? b : a));
+  const bars = points.map((p) => {
+    const h = p.revenue ? Math.max(4, Math.round(p.revenue * 100 / max)) : 0;
+    return '<span class="bar' + (p.revenue ? '' : ' empty') + '" style="height:' + (h || 2) + '%" ' +
+      'title="' + esc(pointLabel(p.label, series.unit) + ': ' + p.count + ' · ' + rub(p.revenue)) + '"></span>';
+  }).join('');
+  const mid = points[Math.floor(points.length / 2)];
+  const axis = points.length > 1
+    ? '<div class="chart-axis"><span>' + esc(pointLabel(points[0].label, series.unit)) + '</span>' +
+        (points.length > 2 ? '<span>' + esc(pointLabel(mid.label, series.unit)) + '</span>' : '') +
+        '<span>' + esc(pointLabel(points[points.length - 1].label, series.unit)) + '</span></div>'
+    : '';
+  return (
+    '<div class="card">' +
+      '<div class="card-title">Выручка ' + (series.unit === 'day' ? 'по дням' : 'по месяцам') + '</div>' +
+      '<div class="chart" role="img" aria-label="Выручка за период">' + bars + '</div>' + axis +
+      '<div class="cta-note">Лучший ' + (series.unit === 'day' ? 'день' : 'месяц') + ': ' +
+        esc(pointLabel(best.label, series.unit)) + ' — ' + best.count + ' · ' + rub(best.revenue) + '</div>' +
+    '</div>'
+  );
+}
+
+function viewAnalytics() {
+  const s = state.seller;
+  const p = analyticsPeriod();
+  const r = s.analytics;
+  const chips = ANALYTICS_PERIODS.map(([key, label]) => (
+    '<button class="chip' + (p.key === key ? ' active' : '') + '" data-action="an-period:' + key + '" ' +
+      'aria-pressed="' + (p.key === key) + '">' + esc(label) + '</button>'
+  )).join('');
+  const dates = p.key === 'custom'
+    ? '<div class="panel-dates">' +
+        '<label>с <input type="date" id="anFrom" value="' + esc(p.from) + '"></label>' +
+        '<label>по <input type="date" id="anTo" value="' + esc(p.to) + '"></label>' +
+      '</div>'
+    : '';
+  const head = '<h1>Продавец</h1>' + sellerModeSwitch() + '<div class="filters">' + chips + '</div>' + dates;
+  if (!r) {
+    return head + '<div class="notice">' +
+      (p.key === 'custom' ? 'Укажите даты периода.' : 'Загружаем…') + '</div>';
+  }
+
+  const metric = (label, value) => (
+    '<div class="metric"><div class="metric-label">' + esc(label) + '</div>' +
+      '<div class="metric-value">' + esc(value) + '</div></div>'
+  );
+  const lost = r.cancelledAfterPaid;
+  const statuses = r.statuses.map((st) => (
+    '<div class="stat-row"><div class="stat-head"><span>' + esc(st.title) + '</span>' +
+      '<span class="stat-num">' + st.count + ' · ' + st.percent + '%</span></div>' +
+      '<div class="stat-bar"><span style="width:' + st.percent + '%"></span></div></div>'
+  )).join('');
+
+  return (
+    head +
+    '<div class="muted an-dates">' + esc(r.period.datesText) + '</div>' +
+    '<div class="metrics">' +
+      metric('Продажи', String(r.sales.count)) +
+      metric('Выручка', rub(r.sales.revenue)) +
+      metric('Средний чек', r.sales.count ? rub(r.sales.average) : '—') +
+      metric('Дошли до оплаты', r.created ? r.conversion + '%' : '—') +
+    '</div>' +
+    (lost.count
+      ? '<div class="notice warn">Отменено после оплаты: ' + lost.count + ' на ' + rub(lost.revenue) +
+          ' · без отменённых: ' + r.net.count + ' на ' + rub(r.net.revenue) + '</div>'
+      : '') +
+    analyticsChart(r.series) +
+    '<div class="card">' +
+      '<div class="card-title">Заказы за период по статусам · оформлено ' + r.created + '</div>' +
+      (statuses || '<div class="muted">Новых заказов за период нет.</div>') +
+    '</div>' +
+    '<div class="cta-note">Продажа — заказ с подтверждённой оплатой, по дате подтверждения. ' +
+      'Тестовые заказы и демо-оплата не учитываются.</div>'
+  );
+}
+
 function viewSeller() {
   const s = state.seller;
   if (s.current) return viewSellerOrder(s.current);
+  if (s.mode === 'analytics') return viewAnalytics();
 
   const filters = [['open', 'Открытые'], ['payment_check', 'Проверить оплату'], ['udid', 'Ставить сертификат'],
     ['installed', 'Инструкция'], ['done', 'Готовые'], ['all', 'Все']];
 
   return (
-    '<h1>Заказы</h1>' +
+    '<h1>Продавец</h1>' + sellerModeSwitch() +
     '<input class="search" id="sellerSearch" type="search" enterkeyhint="search" autocomplete="off" ' +
       'placeholder="Код заказа, UDID или @юзернейм" value="' + esc(s.q) + '">' +
     '<div class="filters">' + filters.map(([key, label]) => {
@@ -1714,6 +1851,16 @@ function bindInputs() {
     });
   }
 
+  ['anFrom', 'anTo'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener('change', () => {
+      analyticsPeriod()[id === 'anFrom' ? 'from' : 'to'] = input.value;
+      saveAnalyticsPeriod();
+      guard(async () => { await loadAnalytics(); render(); });
+    });
+  });
+
   ['sellerFrom', 'sellerTo'].forEach((id) => {
     const input = document.getElementById(id);
     if (!input) return;
@@ -2195,7 +2342,13 @@ function handleAction(raw) {
     state.seller.current = null;
     state.supplier.current = null;
     haptic('light');
-    if (value === 'seller') guard(async () => { await loadSellerOrders(); render(); });
+    if (value === 'seller') {
+      guard(async () => {
+        if (state.seller.mode === 'analytics') await loadAnalytics();
+        else await loadSellerOrders();
+        render();
+      });
+    }
     else if (value === 'supplier') guard(async () => { await loadSupplierOrders(); render(); });
     else if (value === 'order') guard(async () => { await refreshOrder(); render(); });
     else render();
@@ -2246,6 +2399,18 @@ function handleAction(raw) {
   if (kind === 'seller-udid') {
     sellerPrefs(state.seller.status).udid = value || '';
     sellerPrefsChanged();
+    return;
+  }
+  if (kind === 'seller-mode') {
+    state.seller.mode = value;
+    if (value === 'analytics') guard(async () => { await loadAnalytics(); render(); });
+    else guard(async () => { await loadSellerOrders(); render(); });
+    return;
+  }
+  if (kind === 'an-period') {
+    analyticsPeriod().key = value;
+    saveAnalyticsPeriod();
+    guard(async () => { await loadAnalytics(); render(); });
     return;
   }
   if (kind === 'seller-filter') {
