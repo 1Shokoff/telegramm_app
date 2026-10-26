@@ -839,6 +839,27 @@ h2 .test-tag { font-size: 12px; }
 .field-hint { color: var(--muted); font-size: 12px; line-height: 1.4; margin-top: 6px; }
 .pf-error { margin: 12px 0 0; }
 
+/* Промокод покупателя: поле с кнопкой на оформлении и оплате, строка применённого кода. */
+.promo-box { margin: 14px 0 4px; }
+.promo-label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.promo-box .search.promo-input {
+  margin: 0; font-size: 16px; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .3px; text-transform: uppercase;
+}
+.promo-box .search.promo-input::placeholder {
+  font-family: inherit; text-transform: none; letter-spacing: 0;
+}
+.promo-applied {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 14px 0 4px; padding: 12px 14px;
+  border: 1px dashed var(--promo-text); border-radius: var(--radius-m);
+  font-size: 14px; color: var(--promo-text);
+}
+.promo-applied span { min-width: 0; overflow-wrap: anywhere; }
+.promo-applied .linkish { flex: 0 0 auto; padding: 0; }
+.linkish.promo-open { display: block; margin: 0 0 6px; color: var(--promo-text); }
+
 pre.instruction {
   white-space: pre-wrap;
   /* Инструкция может прийти одним длинным словом — без переноса она

@@ -63,7 +63,12 @@ def confirm_order_kb() -> InlineKeyboardMarkup:
     )
 
 
-def payment_kb(order_id: int, mode: str) -> InlineKeyboardMarkup:
+def held_promo(order: dict) -> str | None:
+    """Код промокода, который сейчас за заказом; None — промокода нет."""
+    return order.get("promo_code") if order.get("promo_id") else None
+
+
+def payment_kb(order_id: int, mode: str, promo_code: str | None = None) -> InlineKeyboardMarkup:
     if mode == "demo":
         pay = [InlineKeyboardButton(text="Имитировать оплату", callback_data=cb("demopay", order_id))]
     elif mode == "stars":
@@ -71,14 +76,27 @@ def payment_kb(order_id: int, mode: str) -> InlineKeyboardMarkup:
     else:
         # Сам по себе «Я оплатил» заказ не двигает — кнопка просит чек.
         pay = [InlineKeyboardButton(text="📎 Я оплатил — прислать чек", callback_data=cb("claim", order_id))]
-    return _rows(pay, [InlineKeyboardButton(text="Отменить заказ", callback_data=cb("cancel", order_id))])
+    # У Stars цена в звёздах одна на всех — промокод там не действует.
+    promo: list[InlineKeyboardButton] = []
+    if mode != "stars":
+        promo = [
+            InlineKeyboardButton(text="✖️ Убрать промокод %s" % promo_code, callback_data=cb("unpromo", order_id))
+            if promo_code
+            else InlineKeyboardButton(text="🎟 Ввести промокод", callback_data=cb("promo", order_id))
+        ]
+    return _rows(pay, promo, [InlineKeyboardButton(text="Отменить заказ", callback_data=cb("cancel", order_id))])
+
+
+def promo_input_kb(order_id: int) -> InlineKeyboardMarkup:
+    """Пока бот ждёт промокод сообщением — выйти без него."""
+    return _rows([InlineKeyboardButton(text="Отмена", callback_data=cb("promono", order_id))])
 
 
 def buyer_order_kb(cfg: Config, order: dict) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     status = order["status"]
     if status == const.NEW:
-        return payment_kb(order["id"], order["payment_mode"])
+        return payment_kb(order["id"], order["payment_mode"], held_promo(order))
     if status == const.PAID:
         rows.append([InlineKeyboardButton(text="Как найти UDID", callback_data="nav:udid_help")])
     rows.append([InlineKeyboardButton(text="Обновить статус", callback_data=cb("refresh", order["id"]))])

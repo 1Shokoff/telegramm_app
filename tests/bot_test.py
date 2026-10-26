@@ -533,6 +533,43 @@ async def main() -> int:
     check("покупателю промокоды не показываются", not any("OSEN-20" in t for t in bot.texts_to(BUYER)))
     check("и кнопкой продавца он промокод не включит", not (await db.get_promocode(promo["id"]))["enabled"])
 
+    print("\nПромокод покупателя в боте")
+    shopper = 4242
+    await promocodes.create({"code": "BOT-15", "kind": "percent", "value": 15}, cfg, "seller:%d" % SELLER)
+    bot.reset()
+    await dp.feed_update(bot, callback_update(shopper, "nav:buy"))
+    check("на оформлении сказано, где ввести промокод", any("промокод" in t for t in bot.texts_to(shopper)))
+    await dp.feed_update(bot, callback_update(shopper, "nav:buy_confirm"))
+    mine = await db.get_active_order(shopper)
+    check("под реквизитами — «Ввести промокод»",
+          any(b[1] == "o:promo:%d" % mine["id"] for b in buttons_to(bot, shopper)), str(buttons_to(bot, shopper)))
+    bot.reset()
+    await dp.feed_update(bot, callback_update(shopper, "o:promo:%d" % mine["id"]))
+    check("бот просит прислать код", any("Пришлите промокод" in t for t in bot.texts_to(shopper)))
+    await dp.feed_update(bot, message_update(shopper, "NET-TAKOGO"))
+    check("неизвестный код — причина и кнопка попробовать ещё",
+          any("Такого промокода нет" in t for t in bot.texts_to(shopper))
+          and any(b[1] == "o:promo:%d" % mine["id"] for b in buttons_to(bot, shopper)), str(bot.texts_to(shopper)))
+    bot.reset()
+    await dp.feed_update(bot, callback_update(shopper, "o:promo:%d" % mine["id"]))
+    await dp.feed_update(bot, message_update(shopper, "bot-15"))
+    text = " ".join(bot.texts_to(shopper))
+    check("код применён: новая сумма в реквизитах",
+          "BOT-15 применён" in text and "<code>2 550 ₽</code>" in text, text[-400:])
+    check("под оплатой — «Убрать промокод»",
+          any(b[1] == "o:unpromo:%d" % mine["id"] for b in buttons_to(bot, shopper)))
+    bot.reset()
+    await dp.feed_update(bot, callback_update(shopper, "o:unpromo:%d" % mine["id"]))
+    check("промокод убран — снова полная цена",
+          any("Промокод убран" in t and "3 000 ₽" in t for t in bot.texts_to(shopper))
+          and (await db.get_order(mine["id"]))["price_rub"] == 3000)
+    bot.reset()
+    await dp.feed_update(bot, callback_update(shopper, "o:promo:%d" % mine["id"]))
+    await dp.feed_update(bot, message_update(shopper, "А когда будет установка?"))
+    check("вопрос вместо кода уходит продавцу, а не в проверку промокода",
+          any("А когда будет установка?" in t for t in bot.texts_to(SELLER))
+          and not any("Такого промокода нет" in t for t in bot.texts_to(shopper)), str(bot.texts_to(shopper)))
+
     print("\nУведомления")
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/notify"))

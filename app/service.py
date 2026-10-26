@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from aiogram import Bot
@@ -15,10 +17,14 @@ from aiogram.exceptions import (
 )
 from aiogram.types import InlineKeyboardMarkup
 
-from . import catalog, const, db, keyboards, texts, udid as udid_mod
+from . import catalog, const, db, keyboards, promocodes, texts, udid as udid_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
+
+# Подбор промокодов: столько неудачных попыток за окно — дальше ждать.
+PROMO_TRIES = 10
+PROMO_WINDOW = 15 * 60
 
 
 class ServiceError(Exception):
@@ -54,6 +60,10 @@ class OrderService:
         self.cfg = cfg
         # Каталог собирается из сборок в папке — сервису он нужен для заказов и текстов.
         catalog.use_folder(cfg.ipa_dir)
+        # Применение и возврат промокода — по одному за раз: бот и витрина работают
+        # в одном процессе, и двойное нажатие не должно занять два применения.
+        self._promo_lock = asyncio.Lock()
+        self._promo_fails: dict[int, deque] = defaultdict(deque)
 
     # ------------------------------------------------------------ отправка
 
@@ -188,10 +198,10 @@ class OrderService:
 
         existing = await db.get_active_order(user_id)
         if existing and existing["status"] in const.OPEN_STATUSES:
-            changed = existing.get("app_slug") != app_slug or existing["price_rub"] != price
-            if existing["status"] == const.NEW and changed:
+            if existing["status"] == const.NEW and existing.get("app_slug") != app_slug:
                 existing = await db.set_order_product(existing["id"], app_slug, price)
-            return existing, False
+            # Цена неоплаченного заказа — текущая, вместе с его промокодом.
+            return await self.fresh_price(existing), False
 
         order = await db.create_order(
             user_id=user_id,
@@ -223,16 +233,136 @@ class OrderService:
         """
         if not order or order["status"] != const.NEW:
             return order
+        base = self._base_price(order)
+        if base is None:
+            return order  # сборку убрали — цену не угадываем
+        price, discount = base, 0
+        if order.get("promo_id"):
+            # Применённый промокод остаётся за заказом, даже если его выключили
+            # или срок вышел; пересчитывается только цена, от которой он считается.
+            promo = await db.get_promocode(order["promo_id"])
+            final = promocodes.final_price(base, promo) if promo else None
+            if final:
+                price, discount = final, base - final
+            else:
+                async with self._promo_lock:
+                    released = await db.release_promocode(order, "system", "скидка не меньше новой цены", base)
+                log.info("Заказ %s: промокод %s снят — скидка не меньше цены", order["code"], order["promo_code"])
+                return released or order
+        if price == order["price_rub"] and discount == order.get("promo_discount", 0):
+            return order
+        updated = await db.set_order_product(order["id"], order.get("app_slug"), price, discount)
+        log.info("Заказ %s: цена %s → %s", order["code"], order["price_rub"], price)
+        return updated or order
+
+    def _base_price(self, order: dict) -> int | None:
+        """Цена товара заказа сегодня — без промокода, но с акцией. None — товара больше нет."""
         slug = order.get("app_slug")
         app = catalog.get_app(slug) if slug else None
         if slug and app is None:
-            return order  # сборку убрали — цену не угадываем
-        price = catalog.app_price(app, self.cfg.current_price)
-        if price == order["price_rub"]:
-            return order
-        updated = await db.set_order_product(order["id"], slug, price)
-        log.info("Заказ %s: цена %s → %s", order["code"], order["price_rub"], price)
-        return updated or order
+            return None
+        return catalog.app_price(app, self.cfg.current_price)
+
+    # ------------------------------------------------------------ промокод
+
+    def _promo_wait(self, user_id: int) -> None:
+        """Подбор кодов перебором: после PROMO_TRIES неудач — пауза."""
+        fails = self._promo_fails[user_id]
+        cutoff = time.monotonic() - PROMO_WINDOW
+        while fails and fails[0] < cutoff:
+            fails.popleft()
+        if len(fails) >= PROMO_TRIES:
+            minutes = max(1, int((fails[0] - cutoff) // 60) + 1)
+            raise ServiceError("Слишком много попыток. Попробуйте ещё раз через %s." % texts.plural(
+                minutes, "минуту", "минуты", "минут"))
+
+    def _promo_refuse(self, user_id: int, reason: str) -> ServiceError:
+        self._promo_fails[user_id].append(time.monotonic())
+        return ServiceError(reason)
+
+    async def _usable_promo(self, user_id: int, raw: str, base: int, order_id: int | None = None) -> dict:
+        """Промокод, который покупатель может применить к цене base, — или понятный отказ."""
+        if self.cfg.payment_mode == "stars":
+            raise ServiceError("Промокоды действуют при оплате переводом.")
+        self._promo_wait(user_id)
+        if not (raw or "").strip():
+            raise ServiceError("Введите промокод.")
+        promo = await promocodes.find(raw)
+        if not promo:
+            raise self._promo_refuse(user_id, promocodes.NOT_FOUND)
+        reason = promocodes.refusal(promo)
+        if reason:
+            raise self._promo_refuse(user_id, reason)
+        if promo["per_user"] is not None and await db.promo_uses_by_user(promo["id"], user_id, order_id) >= promo["per_user"]:
+            raise self._promo_refuse(user_id, promocodes.PER_USER)
+        if not promocodes.final_price(base, promo):
+            raise self._promo_refuse(user_id, promocodes.TOO_BIG)
+        return promo
+
+    async def check_promo(self, user_id: int, raw: str, app_slug: str | None = None) -> dict:
+        """Проверка на экране оформления, пока заказа ещё нет: что станет с ценой.
+
+        Применение не занимается — его займёт оформление заказа с этим кодом.
+        """
+        if app_slug is not None and catalog.get_app(app_slug) is None:
+            raise ServiceError("Такого приложения нет в каталоге.")
+        base = catalog.app_price(catalog.get_app(app_slug), self.cfg.current_price)
+        current = await db.get_active_order(user_id)
+        own = current["id"] if current and current["status"] in const.OPEN_STATUSES else None
+        promo = await self._usable_promo(user_id, raw, base, own)
+        final = promocodes.final_price(base, promo)
+        assert final
+        return {"promo": promo, "base": base, "price": final, "discount": base - final}
+
+    async def apply_promo(self, order_id: int, raw: str, user_id: int) -> tuple[dict, str]:
+        """Покупатель применяет промокод к неоплаченному заказу. Возвращает заказ и ответ ему."""
+        async with self._promo_lock:
+            order = await self._load(order_id)
+            if order["user_id"] != user_id:
+                raise ServiceError("Это не ваш заказ.")
+            if order["status"] == const.PAYMENT_CHECK:
+                raise ServiceError("Чек уже у продавца — промокод к этому заказу не применить.")
+            if order["status"] != const.NEW:
+                raise ServiceError("Промокод применяется до оплаты заказа.")
+            base = self._base_price(order)
+            if base is None:
+                raise ServiceError("Товара из заказа больше нет — оформите заказ заново.")
+            same = await promocodes.find(raw)
+            if same and order.get("promo_id") == same["id"]:
+                # Уже за заказом — даже если с тех пор промокод выключили или срок вышел.
+                return order, "Промокод %s уже применён." % same["code"]
+            promo = await self._usable_promo(user_id, raw, base, order_id)
+            final = promocodes.final_price(base, promo)
+            assert final
+            if not await db.hold_promocode(order, promo, final, base - final, "user:%d" % user_id):
+                # Последнее применение успели занять, пока покупатель вводил код.
+                fresh = await db.get_promocode(promo["id"])
+                if fresh and fresh["per_user"] is not None and await db.promo_uses_by_user(
+                        promo["id"], user_id, order_id) >= fresh["per_user"]:
+                    raise self._promo_refuse(user_id, promocodes.PER_USER)
+                raise self._promo_refuse(user_id, promocodes.REFUSALS[promocodes.EXHAUSTED])
+            updated = await self._load(order_id)
+        log.info("Заказ %s: применён промокод %s, %s → %s", order["code"], promo["code"], base, final)
+        return updated, "Промокод %s применён: скидка %s учтена. К оплате — %s." % (
+            promo["code"], texts.money(base - final), texts.money(final))
+
+    async def remove_promo(self, order_id: int, user_id: int) -> dict:
+        """Покупатель убрал промокод до оплаты: применение возвращается, цена — без него."""
+        async with self._promo_lock:
+            order = await self._load(order_id)
+            if order["user_id"] != user_id:
+                raise ServiceError("Это не ваш заказ.")
+            if order["status"] != const.NEW:
+                raise ServiceError("Чек уже у продавца — промокод не убрать.")
+            if not order.get("promo_id"):
+                return order
+            base = self._base_price(order)
+            released = await db.release_promocode(
+                order, "user:%d" % user_id, "покупатель убрал промокод",
+                base if base is not None else order["price_rub"] + order["promo_discount"],
+            )
+        assert released
+        return released
 
     async def _load(self, order_id: int) -> dict:
         order = await db.get_order(order_id)
@@ -403,7 +533,7 @@ class OrderService:
             "Платёж по заказу <b>%s</b> пока не найден.\n"
             "Проверьте сумму и комментарий к переводу или напишите в помощь."
             % texts.e(updated["code"]),
-            keyboards.payment_kb(order_id, updated["payment_mode"]),
+            keyboards.payment_kb(order_id, updated["payment_mode"], keyboards.held_promo(updated)),
             kind=const.NOTIFY_STATUS,
             order_id=order_id,
         )
@@ -476,6 +606,10 @@ class OrderService:
             order_id, const.CANCELLED, actor, "закрыт" if was_done else "отменён"
         )
         assert updated
+        if updated.get("promo_id") and not updated.get("paid_at"):
+            # Отменён до оплаты — применение промокода возвращается в лимит.
+            async with self._promo_lock:
+                updated = await db.release_promocode(updated, actor, "заказ отменён до оплаты") or updated
         if by_seller:
             await self.send(
                 updated["user_id"],

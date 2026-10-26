@@ -4,10 +4,14 @@
 раздел «Промокоды» во вкладке «Продавец», в боте — /promos и /promo КОД.
 Витрина промокоды не показывает: публикуем их сами, где нужно.
 
-К заказам промокоды пока не применяются — это следующий этап. Расчёт цены
-уже здесь, его показывает карточка промокода. Во время акции промокод
+Покупатель вводит промокод при оформлении и на шаге оплаты — в Mini App и
+в боте; само применение — OrderService.apply_promo. Во время акции промокод
 считается от цены по акции: 3 000 ₽ − 50% = 1 500 ₽, промокод 20% → 1 200 ₽.
 Бесплатных промокодов нет: процент — до 99, скидка в рублях — меньше цены.
+
+Применение занимается сразу, как покупатель применил код, и возвращается,
+если он убрал промокод или заказ отменили до оплаты. Применённый промокод
+остаётся за заказом, даже если его потом выключили или срок вышел.
 """
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ import secrets
 import sqlite3
 from datetime import date, datetime
 
-from . import db
+from . import const, db
 from .config import Config, today_msk
 from .texts import money, plural
 
@@ -48,6 +52,18 @@ EVENT_TITLES = {
     "promo_updated": "Изменён",
     "promo_enabled": "Включён",
     "promo_disabled": "Выключен",
+    "promo_applied": "Применён к заказу",
+    "promo_released": "Применение возвращено",
+}
+
+# Что видит покупатель, когда промокод не применился.
+NOT_FOUND = "Такого промокода нет — проверьте, как он написан."
+PER_USER = "Вы уже использовали этот промокод."
+TOO_BIG = "Промокод не подходит к цене этого заказа."
+REFUSALS = {
+    DISABLED: "Промокод не действует.",
+    EXPIRED: "Срок действия промокода истёк.",
+    EXHAUSTED: "Промокод закончился: все применения уже использованы.",
 }
 
 # Случайный код вида IAPKI-7KQT2X-C9S9WL. Без 0/O и 1/I/L: их путают,
@@ -86,6 +102,20 @@ def _tidy(raw: str) -> str:
 def normalize(raw: str) -> str:
     """Код для поиска: без пробелов, заглавными, русские двойники — латиницей."""
     return _tidy(raw).translate(_LOOKALIKES)
+
+
+def looks_like_code(raw: str) -> bool:
+    """Сообщение похоже на промокод, а не на вопрос продавцу: одно «слово» из латиницы и цифр."""
+    code = normalize(raw)
+    return CODE_MIN <= len(code) <= CODE_MAX and bool(_CODE.match(code))
+
+
+def refusal(promo: dict, today: date | None = None) -> str | None:
+    """Почему промокод сейчас не применить; None — применить можно."""
+    st = status(promo, today)
+    if st == SCHEDULED:
+        return "Промокод начнёт действовать %s." % _day(promo["starts_on"])
+    return REFUSALS.get(st)
 
 
 def clean_code(raw: object) -> str:
@@ -343,21 +373,44 @@ def public(promo: dict, cfg: Config, today: date | None = None) -> dict:
 
 
 async def actor_name(actor: str) -> str:
-    """seller:123 → @username продавца, а если его не знаем — номер."""
+    """seller:123 и user:123 → @username, а если его не знаем — имя или номер."""
     kind, _, raw_id = actor.partition(":")
-    if kind != "seller" or not raw_id.isdigit():
-        return actor
+    if kind not in ("seller", "user") or not raw_id.isdigit():
+        return {"system": "бот"}.get(actor, actor)
+    if kind == "user" and int(raw_id) == db.ANON_USER_ID:
+        return db.ANON_NAME
     user = await db.get_user(int(raw_id)) or {}
     if user.get("username"):
         return "@" + user["username"]
-    return user.get("first_name") or "продавец %s" % raw_id
+    return user.get("first_name") or ("продавец %s" if kind == "seller" else "покупатель %s") % raw_id
+
+
+def _buyer(order: dict) -> str:
+    if order["user_id"] == db.ANON_USER_ID:
+        return db.ANON_NAME
+    if order.get("username"):
+        return "@" + order["username"]
+    return order.get("first_name") or "ID %d" % order["user_id"]
 
 
 async def details(promo: dict, cfg: Config, today: date | None = None) -> dict:
-    """Карточка промокода целиком: цены с ним, кто создал и история изменений."""
+    """Карточка промокода целиком: цены с ним, заказы, кто создал и история изменений."""
     data = public(promo, cfg, today)
     data["prices"] = prices(promo, cfg)
     data["createdBy"] = await actor_name(promo["created_by"])
+    data["orders"] = [
+        {
+            "id": o["id"],
+            "code": o["code"],
+            "status": o["status"],
+            "statusTitle": const.TITLES.get(o["status"], o["status"]),
+            "priceText": money(o["price_rub"]),
+            "discountText": money(o["promo_discount"]),
+            "buyer": _buyer(o),
+            "paid": bool(o["paid_at"]),
+        }
+        for o in await db.list_promo_orders(promo["id"])
+    ]
     names: dict[str, str] = {}
     history = []
     for ev in await db.list_promo_events(promo["id"]):

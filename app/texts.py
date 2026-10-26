@@ -65,6 +65,11 @@ def analytics_text(r: dict) -> str:
 
 PROMO_HINT = "Создать промокод или поменять его условия — в Mini App: «Продавец» → «Промокоды»."
 
+PROMO_ASK = (
+    "🎟 Пришлите промокод одним сообщением.\n\n"
+    "Он применится к заказу <b>%s</b>, и бот пришлёт сумму со скидкой."
+)
+
 
 def promocode_list(data: dict, titles: dict[str, str]) -> str:
     """Шапка /promos: сколько промокодов и в каких они статусах."""
@@ -93,6 +98,13 @@ def promocode_card(p: dict) -> str:
     if p["note"]:
         lines.append("Заметка: %s" % e(p["note"]))
     lines.append("Создал: %s, %s" % (e(p["createdBy"]), when(p["createdAt"])))
+    orders = p.get("orders") or []
+    if orders:
+        lines.append("\n<b>Заказы с промокодом</b>")
+        for o in orders[:10]:
+            lines.append("%s · %s · %s · %s" % (e(o["code"]), e(o["statusTitle"]), e(o["priceText"]), e(o["buyer"])))
+        if len(orders) > 10:
+            lines.append("…и ещё %d — в Mini App" % (len(orders) - 10))
     if not p["canDelete"]:
         lines.append("\n<i>Промокод уже применяли — удалить нельзя, только выключить.</i>")
     lines.append("\n<i>%s</i>" % e(PROMO_HINT))
@@ -129,6 +141,33 @@ def bot_short_description(cfg: Config) -> str:
 def promo_applies(cfg: Config, price_rub: int) -> bool:
     """Заказ оформлен по цене акции — тогда к сумме дописываем, что скидка учтена."""
     return cfg.promo_active() and price_rub == cfg.promo_price_rub
+
+
+def base_price(order: dict) -> int:
+    """Цена заказа без промокода (с акцией, если она была)."""
+    return order["price_rub"] + (order.get("promo_discount") or 0)
+
+
+def promocode_line(order: dict) -> str:
+    """«Промокод: OSEN-20 · −300 ₽ (без него 1 500 ₽)» для карточек; пусто — промокода не было."""
+    if not order.get("promo_code"):
+        return ""
+    line = "Промокод: <code>%s</code> · −%s (без него %s)" % (
+        e(order["promo_code"]), money(order.get("promo_discount") or 0), money(base_price(order))
+    )
+    if not order.get("promo_id"):
+        line += " — применение возвращено"
+    return line
+
+
+def discount_note(order: dict, cfg: Config) -> str:
+    """«Скидка уже учтена: …» под суммой к оплате — акция, промокод или оба."""
+    parts = []
+    if promo_applies(cfg, base_price(order)):
+        parts.append(cfg.promo_title)
+    if order.get("promo_id") and order.get("promo_code"):
+        parts.append("промокод %s" % order["promo_code"])
+    return "Скидка уже учтена: %s." % " и ".join(parts) if parts else ""
 
 
 def plural(n: int, one: str, few: str, many: str) -> str:
@@ -243,6 +282,8 @@ def buyer_order_card(order: dict) -> str:
         e(catalog.product_name(order.get("app_slug"))),
         money(order["price_rub"]),
     )
+    if order.get("promo_id") and order.get("promo_code"):
+        head += "\nПромокод %s: −%s" % (e(order["promo_code"]), money(order.get("promo_discount") or 0))
     status = "Статус: <b>%s</b>" % e(const.TITLES.get(order["status"], order["status"]))
     body = steps_block(order)
     parts = [head, status, body]
@@ -261,6 +302,8 @@ def seller_order_card(order: dict) -> str:
         "Товар: %s" % e(catalog.product_name(order.get("app_slug"))),
         "Сумма: %s · оплата: %s" % (money(order["price_rub"]), e(order["payment_mode"])),
     ]
+    if order.get("promo_code"):
+        lines.append(promocode_line(order))
     if order.get("device_udid"):
         lines.append("UDID: <code>%s</code>" % e(order["device_udid"]))
     else:
@@ -332,9 +375,12 @@ def payment_instructions(order: dict, cfg: Config) -> str:
         lines.append("Реквизиты уточните у продавца.")
 
     # Сумму показываем всегда: она известна и без заполненных реквизитов.
-    lines.append("Сумма к оплате: <code>%s</code>" % e(cfg.amount_text(order["price_rub"])))
-    if promo_applies(cfg, order["price_rub"]):
-        lines.append("<i>Скидка уже учтена: %s.</i>" % e(cfg.promo_title))
+    # С промокодом — только цена заказа: PAY_AMOUNT из .env о скидке не знает.
+    amount = money(order["price_rub"]) if order.get("promo_id") else cfg.amount_text(order["price_rub"])
+    lines.append("Сумма к оплате: <code>%s</code>" % e(amount))
+    note = discount_note(order, cfg)
+    if note:
+        lines.append("<i>%s</i>" % e(note))
 
     if rows:
         lines.append("")
@@ -419,12 +465,16 @@ def instruction_message(order: dict, webapp_enabled: bool) -> str:
 def receipt_caption(order: dict, header: str, title: str) -> str:
     """Подпись к чеку-файлу для продавца. Telegram режет подписи на 1024 знаках,
     поэтому только короткие поля — без заметок продавца."""
-    return "%s\n\n<b>Заказ %s</b> · %s\nПокупатель: %s\nСумма: %s\nЧек: %s" % (
+    # С промокодом сумма меньше обычной — продавцу сразу видно почему.
+    promo = (" · промокод %s −%s" % (e(order["promo_code"]), money(order.get("promo_discount") or 0))
+             if order.get("promo_code") else "")
+    return "%s\n\n<b>Заказ %s</b> · %s\nПокупатель: %s\nСумма: %s%s\nЧек: %s" % (
         header,
         e(order["code"]),
         e(const.TITLES.get(order["status"], "—")),
         user_line(order),
         money(order["price_rub"]),
+        promo,
         e(title[:200]),
     )
 

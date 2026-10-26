@@ -1062,6 +1062,8 @@ async def test_migration(tmp: str) -> None:
     check("старый выполненный заказ не считается закрытым", order and order["closed_at"] is None)
     events = {row["name"] for row in await db._fetchall("PRAGMA table_info(events)")}
     check("в журнал событий добавлена колонка promo_id", "promo_id" in events)
+    check("в заказы — колонки промокода", {"promo_id", "promo_code", "promo_discount"} <= columns)
+    check("у старого заказа промокода нет", order["promo_id"] is None and order["promo_discount"] == 0)
     check("старая история заказа на месте", len(await db.list_events(1)) == 1)
     promo = await db.create_promocode(
         "OLD-BASE", {"kind": "percent", "value": 10, "starts_on": None, "ends_on": None, "max_uses": None,
@@ -1630,6 +1632,175 @@ async def test_promocodes(cfg) -> None:
         await client.close()
 
 
+async def test_promo_apply(cfg) -> None:
+    """Применение промокода покупателем: цена, лимиты, возврат, отказы, API."""
+    print("\nПрименение промокода")
+    today = today_msk()
+    sale = replace(cfg, price_rub=3000, promo_price_rub=1500, promo_until=None, promo_label="-50% в честь открытия")
+    plain = replace(cfg, price_rub=3000, promo_price_rub=0)
+    bot = FakeBot()
+    svc = OrderService(bot, sale)
+    seller = "seller:%d" % SELLER
+    for uid in range(911, 921):
+        await db.upsert_user(uid, "u%d" % uid, "Покупатель %d" % uid)
+
+    async def refused(coro, needle: str) -> bool:
+        try:
+            await coro
+        except ServiceError as exc:
+            if needle in str(exc):
+                return True
+            print("       отказ: %s" % exc)
+        return False
+
+    async def used(promo_id: int) -> int:
+        return (await db.get_promocode(promo_id))["used"]
+
+    osen = await promocodes.create({"code": "OSEN-20", "kind": "percent", "value": 20, "maxUses": 2}, sale, seller)
+    a, _ = await svc.get_or_create_order(911)
+    a, reply = await svc.apply_promo(a["id"], " osen–20 ", 911)
+    check("акция и промокод: (3000 − 50%) − 20% = 1 200 ₽",
+          (a["price_rub"], a["promo_discount"], a["promo_code"]) == (1200, 300, "OSEN-20"), str(a))
+    check("ответ: применён, скидка и сумма к оплате",
+          "применён" in reply and "300 ₽" in reply and "1 200 ₽" in reply, reply)
+    check("применение занято сразу", await used(osen["id"]) == 1)
+    _, reply = await svc.apply_promo(a["id"], "OSEN-20", 911)
+    check("повторный ввод того же кода второго применения не занимает",
+          "уже применён" in reply and await used(osen["id"]) == 1, reply)
+    check("в истории заказа — применение", any(ev["type"] == "promo_applied" for ev in await db.list_events(a["id"])))
+
+    b, _ = await svc.get_or_create_order(912)
+    b, _ = await svc.apply_promo(b["id"], "OSEN-20", 912)
+    c, _ = await svc.get_or_create_order(913)
+    check("все применения заняты — «закончился»",
+          await refused(svc.apply_promo(c["id"], "OSEN-20", 913), "закончился"))
+    b = await svc.remove_promo(b["id"], 912)
+    check("покупатель убрал промокод — цена без него", b["price_rub"] == 1500 and b["promo_code"] is None)
+    check("и применение вернулось в лимит", await used(osen["id"]) == 1)
+    c, _ = await svc.apply_promo(c["id"], "OSEN-20", 913)
+    check("освободившееся применение досталось другому", c["price_rub"] == 1200 and await used(osen["id"]) == 2)
+    c = await svc.cancel(c["id"], "user:913", by_seller=False, actor_id=913)
+    check("отменён до оплаты — применение вернулось", await used(osen["id"]) == 1)
+    check("а код и скидка остались в заказе для истории",
+          c["promo_id"] is None and c["promo_code"] == "OSEN-20" and c["promo_discount"] == 300, str(c))
+    check("карточка продавца: «применение возвращено»", "применение возвращено" in texts.seller_order_card(c))
+
+    a, _ = await svc.submit_receipt(a["id"], 911, Receipt(title="чек.jpg", file="f", kind="photo"))
+    check("продавцу в чеке — промокод и скидка", any("промокод OSEN-20 −300 ₽" in cap for _, _, cap in bot.files), str(bot.files)[-300:])
+    check("после чека промокод не сменить",
+          await refused(svc.apply_promo(a["id"], "OSEN-20", 911), "Чек уже у продавца"))
+    check("и не убрать", await refused(svc.remove_promo(a["id"], 911), "Чек уже у продавца"))
+    a = await svc.confirm_payment(a["id"], seller)
+    a = await svc.cancel(a["id"], seller, by_seller=True)
+    check("отменён после оплаты — применение остаётся", await used(osen["id"]) == 1 and a["promo_id"] == osen["id"])
+
+    once = await promocodes.create({"code": "ONCE-1", "kind": "percent", "value": 10, "perUser": 1}, sale, seller)
+    d, _ = await svc.get_or_create_order(914)
+    d, _ = await svc.apply_promo(d["id"], "ONCE-1", 914)
+    await db.set_status(d["id"], const.DONE, seller)
+    d2, _ = await svc.get_or_create_order(914)
+    check("лимит на покупателя: «Вы уже использовали»",
+          await refused(svc.apply_promo(d2["id"], "ONCE-1", 914), "Вы уже использовали этот промокод"))
+    check("нет такого кода", await refused(svc.apply_promo(d2["id"], "NOPE-123", 914), "Такого промокода нет"))
+    await promocodes.set_enabled(once["id"], False, seller)
+    check("выключенный — «не действует»", await refused(svc.apply_promo(d2["id"], "ONCE-1", 914), "не действует"))
+    late = await promocodes.create({"code": "LATE-1", "kind": "rub", "value": 100}, sale, seller)
+    await db.conn().execute("UPDATE promo_codes SET ends_on = ? WHERE id = ?",
+                            ((today - timedelta(days=1)).isoformat(), late["id"]))
+    await db.conn().commit()
+    check("истёк — «срок действия истёк»", await refused(svc.apply_promo(d2["id"], "LATE-1", 914), "Срок действия промокода истёк"))
+    soon = await promocodes.create(
+        {"code": "SOON-1", "kind": "rub", "value": 100, "startsOn": (today + timedelta(days=3)).isoformat()}, sale, seller)
+    check("ещё не начался — с какого дня",
+          await refused(svc.apply_promo(d2["id"], "SOON-1", 914), "начнёт действовать %s" % (today + timedelta(days=3)).strftime("%d.%m.%Y")))
+    check("промокод не съел применения при отказах", await used(soon["id"]) == 0)
+
+    e, _ = await svc.get_or_create_order(915)
+    for _ in range(10):
+        await refused(svc.apply_promo(e["id"], "WRONG-%d" % _, 915), "")
+    check("подбор кодов: после 10 неудач — пауза",
+          await refused(svc.apply_promo(e["id"], "OSEN-20", 915), "Слишком много попыток"))
+
+    stars = OrderService(bot, replace(sale, payment_mode="stars"))
+    f, _ = await svc.get_or_create_order(916)
+    check("при оплате Stars промокод не действует",
+          await refused(stars.apply_promo(f["id"], "OSEN-20", 916), "переводом"))
+
+    f, _ = await svc.apply_promo(f["id"], "OSEN-20", 916)
+    await promocodes.set_enabled(osen["id"], False, seller)
+    after = await OrderService(bot, plain).fresh_price(f)
+    check("акция кончилась, промокод выключили — он остаётся: 3000 − 20% = 2 400 ₽",
+          after["price_rub"] == 2400 and after["promo_discount"] == 600 and after["promo_id"] == osen["id"], str(after))
+    check("выключенный промокод за заказом по-прежнему «уже применён»",
+          "уже применён" in (await svc.apply_promo(f["id"], "OSEN-20", 916))[1])
+
+    rub = await promocodes.create({"code": "RUB-900", "kind": "rub", "value": 900}, sale, seller)
+    g, _ = await svc.get_or_create_order(917)
+    g, _ = await svc.apply_promo(g["id"], "RUB-900", 917)
+    check("скидка в рублях: 1 500 − 900 = 600 ₽", g["price_rub"] == 600)
+    cheap = await OrderService(bot, replace(cfg, price_rub=800, promo_price_rub=0)).fresh_price(g)
+    check("цена стала меньше скидки — промокод снят, бесплатно не будет",
+          cheap["price_rub"] == 800 and cheap["promo_id"] is None and await used(rub["id"]) == 0, str(cheap))
+
+    sale_amount = replace(sale, pay_amount="1 500 ₽")
+    text = texts.payment_instructions(f, sale_amount)
+    check("с промокодом сумма — цена заказа, а не PAY_AMOUNT", "<code>1 200 ₽</code>" in text, text[:300])
+    check("в реквизитах: скидка учтена — акция и промокод",
+          "-50% в честь открытия и промокод OSEN-20" in text, text)
+    check("карточка продавца: промокод и цена без него",
+          "Промокод: <code>OSEN-20</code> · −300 ₽ (без него 1 500 ₽)" in texts.seller_order_card(f))
+    labels = [btn.text for row in keyboards.buyer_order_kb(sale, f).inline_keyboard for btn in row]
+    check("в боте под оплатой — «Убрать промокод»", any("Убрать промокод OSEN-20" in t for t in labels), str(labels))
+    card = await promocodes.details(await db.get_promocode(osen["id"]), sale)
+    check("в карточке промокода — заказы с ним",
+          {o["code"] for o in card["orders"]} == {a["code"], f["code"]}, str([o["code"] for o in card["orders"]]))
+    check("в истории промокода — применения и возвраты",
+          {"Применён к заказу", "Применение возвращено"} <= {h["title"] for h in card["history"]})
+
+    await db.delete_order(f["id"], seller)
+    check("удалили заказ — применение вернулось", await used(osen["id"]) == 1)
+
+    await promocodes.set_enabled(osen["id"], True, seller)
+    found = await svc.check_promo(918, "osen-20")
+    check("проверка на оформлении: цена с промокодом", (found["price"], found["discount"]) == (1200, 300))
+    check("и применения не занимает", await used(osen["id"]) == 1)
+
+    app = build_app(sale, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    me = {"X-Init-Data": make_init_data(919)}
+    try:
+        res = await client.post("/api/promo/check", json={"code": "osen-20"}, headers=me)
+        data = await res.json()
+        check("API: проверка кода на оформлении", res.status == 200 and data["priceText"] == "1 200 ₽", str(data))
+        res = await client.post("/api/promo/check", json={"code": "NOPE-9"}, headers=me)
+        check("API: отказ — 400 с причиной", res.status == 400 and "Такого промокода нет" in (await res.json())["error"])
+        res = await client.post("/api/order/create", json={"promo": "OSEN-20"}, headers=me)
+        data = await res.json()
+        order = data["order"]
+        check("API: заказ оформлен сразу с промокодом",
+              data["promo"]["ok"] and order["priceText"] == "1 200 ₽" and order["promoActive"]
+              and order["basePriceText"] == "1 500 ₽" and order["promoDiscountText"] == "300 ₽", str(data)[:300])
+        check("API: применение занято при оформлении", await used(osen["id"]) == 2)
+        res = await client.post("/api/order/promo/remove", json={"orderId": order["id"]}, headers=me)
+        check("API: убрать промокод", res.status == 200 and (await res.json())["order"]["priceText"] == "1 500 ₽")
+        res = await client.post("/api/order/promo", json={"orderId": order["id"], "code": "LATE-1"}, headers=me)
+        check("API: истёкший — 400 с причиной", res.status == 400 and "истёк" in (await res.json())["error"])
+        res = await client.post("/api/order/promo", json={"orderId": order["id"], "code": "osen-20"}, headers=me)
+        data = await res.json()
+        check("API: применить к заказу", res.status == 200 and data["order"]["price"] == 1200 and "применён" in data["message"])
+        res = await client.post("/api/order/promo", json={"orderId": order["id"], "code": "OSEN-20"},
+                                headers={"X-Init-Data": make_init_data(920)})
+        check("API: к чужому заказу — нет", res.status == 400 and "не ваш" in (await res.json())["error"])
+        res = await client.post("/api/order/create", json={"promo": "OSEN-20"}, headers={"X-Init-Data": make_init_data(920)})
+        data = await res.json()
+        check("API: применения кончились — заказ оформлен, промокод с причиной",
+              res.status == 200 and data["promo"]["ok"] is False and "закончился" in data["promo"]["message"]
+              and data["order"]["priceText"] == "1 500 ₽", str(data)[:300])
+    finally:
+        await client.close()
+
+
 def re_full(pattern: str, value: str) -> bool:
     return re.fullmatch(pattern, value) is not None
 
@@ -1816,6 +1987,9 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "promocodes.sqlite3"))
     await test_promocodes(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "promo_apply.sqlite3"))
+    await test_promo_apply(cfg)
     await db.close()
     await test_migration(tmp)
 

@@ -224,6 +224,14 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "isTest": bool(order.get("is_test")),
         # Оплата подтверждалась — заказ входит в продажи, даже если потом отменён.
         "paid": bool(order.get("paid_at")),
+        # Промокод: price уже со скидкой, basePrice — без него (с акцией).
+        "basePrice": texts.base_price(order),
+        "basePriceText": texts.money(texts.base_price(order)),
+        "promoCode": order.get("promo_code"),
+        # Применение за заказом; у отменённого до оплаты оно возвращено, код — для истории.
+        "promoActive": bool(order.get("promo_id")),
+        "promoDiscount": order.get("promo_discount") or 0,
+        "promoDiscountText": texts.money(order.get("promo_discount") or 0),
     }
     if full:
         data["udid"] = order.get("device_udid")
@@ -390,7 +398,55 @@ async def create_order(request: web.Request) -> web.Response:
     app_slug = data.get("app") or None
     if app_slug is not None and not isinstance(app_slug, str):
         raise ApiError("Некорректное приложение")
-    order, _created = await service_of(request).get_or_create_order(user.id, app_slug)
+    svc = service_of(request)
+    order, _created = await svc.get_or_create_order(user.id, app_slug)
+    # Промокод, проверенный на экране оформления, занимается вместе с заказом.
+    # Не применился (последнее применение заняли) — заказ всё равно оформлен.
+    promo = None
+    code = str(data.get("promo") or "").strip()
+    if code and order["status"] == const.NEW:
+        try:
+            order, message = await svc.apply_promo(order["id"], code, user.id)
+            promo = {"ok": True, "message": message}
+        except ServiceError as exc:
+            promo = {"ok": False, "message": str(exc)}
+    return web.json_response({"order": order_public(order), "promo": promo})
+
+
+@routes.post("/api/promo/check")
+async def check_promo(request: web.Request) -> web.Response:
+    """Промокод на экране оформления, пока заказа нет: что станет с ценой. Ничего не занимает."""
+    user = await current_user(request)
+    data = await body(request)
+    app_slug = data.get("app") or None
+    if app_slug is not None and not isinstance(app_slug, str):
+        raise ApiError("Некорректное приложение")
+    found = await service_of(request).check_promo(user.id, str(data.get("code") or ""), app_slug)
+    return web.json_response({
+        "code": found["promo"]["code"],
+        "valueText": promocodes.value_text(found["promo"]),
+        "basePrice": found["base"],
+        "basePriceText": texts.money(found["base"]),
+        "price": found["price"],
+        "priceText": texts.money(found["price"]),
+        "discountText": texts.money(found["discount"]),
+    })
+
+
+@routes.post("/api/order/promo")
+async def order_promo(request: web.Request) -> web.Response:
+    """Промокод к неоплаченному заказу. Отказ — 400 с причиной для покупателя."""
+    user = await current_user(request)
+    data = await body(request)
+    order, message = await service_of(request).apply_promo(order_id_of(data), str(data.get("code") or ""), user.id)
+    return web.json_response({"order": order_public(order), "message": message})
+
+
+@routes.post("/api/order/promo/remove")
+async def order_promo_remove(request: web.Request) -> web.Response:
+    user = await current_user(request)
+    data = await body(request)
+    order = await service_of(request).remove_promo(order_id_of(data), user.id)
     return web.json_response({"order": order_public(order)})
 
 

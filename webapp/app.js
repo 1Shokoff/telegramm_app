@@ -20,6 +20,10 @@ const state = {
   agreeUdid: false,
   // Покупатель нажал «Закрыть заказ» и видит вопрос «Точно закрыть?».
   confirmClose: false,
+  // Промокод на оформлении, пока заказа нет: что введено, что сервер насчитал, почему отказ.
+  checkoutPromo: { code: '', check: null, error: '' },
+  // Промокод на экране оплаты: поле раскрыто, что введено, почему отказ.
+  orderPromo: { open: false, code: '', error: '' },
   busy: false,
   // prefs — сортировка и фильтры каждой подгруппы, читаются из памяти устройства при первом обращении.
   seller: {
@@ -322,6 +326,8 @@ function viewCheckout() {
   // Скидка действует на общую цену; у приложения со своей ценой её нет.
   const promo = promoOf();
   const oldPrice = promo && (app ? app.oldPriceText : promo.oldPriceText);
+  // Промокод проверен сервером: цена с ним — та, что будет в заказе.
+  const pc = state.checkoutPromo.check;
 
   return (
     stepper(1) +
@@ -339,7 +345,13 @@ function viewCheckout() {
         ? '<div class="row"><span class="label">Скидка</span><span class="value promo-value">' +
             esc(promo.label) + ' · −' + esc(promo.discountText) + '</span></div>'
         : '') +
+      (pc
+        ? '<div class="row"><span class="label">Промокод ' + esc(pc.code) + '</span>' +
+            '<span class="value promo-value">−' + esc(pc.discountText) + '</span></div>' +
+          '<div class="row"><span class="label">К оплате</span><span class="value new-price">' + esc(pc.priceText) + '</span></div>'
+        : '') +
       '<div class="row"><span class="label">Оплата</span><span class="value">' + esc(modeText) + '</span></div>' +
+      (b.payment.mode !== 'stars' ? promoCodeBlock('checkout', pc && pc.code) : '') +
       (b.payment.mode === 'stars'
         ? '<div class="row"><span class="label">Сумма в Stars</span><span class="value">' + (b.payment.stars || '—') + '</span></div>'
         : '') +
@@ -432,16 +444,60 @@ function proofBlock() {
   );
 }
 
-/* Заказ оформлен по цене акции — показываем, какой была цена без скидки. */
+/* Заказ оформлен по цене акции — показываем, какой была цена без скидки.
+   С промокодом сравниваем цену до него: акция и промокод складываются. */
 function orderPromo(order) {
   const promo = promoOf();
-  return promo && order && order.price === state.boot.product.price ? promo : null;
+  if (!promo || !order) return null;
+  const base = order.basePrice != null ? order.basePrice : order.price;
+  return base === state.boot.product.price ? promo : null;
+}
+
+/* Зачёркнутая цена у заказа: обычная — во время акции, иначе цена до промокода. */
+function orderOldPrice(order) {
+  const sale = orderPromo(order);
+  if (sale) return sale.oldPriceText;
+  return order.promoActive ? order.basePriceText : null;
+}
+
+/* Поле промокода: на оформлении (заказа ещё нет) и на экране оплаты.
+   applied — код уже за заказом или проверен: тогда вместо поля — «Убрать». */
+function promoCodeBlock(where, applied) {
+  if (applied) {
+    return (
+      '<div class="promo-applied"><span>🎟 Промокод <b>' + esc(applied) + '</b> применён</span>' +
+        '<button type="button" class="linkish" data-action="bp-remove:' + where + '">Убрать</button></div>'
+    );
+  }
+  const s = where === 'checkout' ? state.checkoutPromo : state.orderPromo;
+  const id = 'promoInput-' + where;
+  return (
+    '<div class="promo-box">' +
+      '<label class="promo-label" for="' + id + '">Промокод</label>' +
+      '<div class="input-row">' +
+        '<input id="' + id + '" class="search promo-input" value="' + esc(s.code) + '" maxlength="40" ' +
+          'placeholder="Если есть" autocapitalize="characters" autocomplete="off" autocorrect="off" ' +
+          'spellcheck="false" enterkeyhint="done">' +
+        '<button type="button" class="btn btn-secondary btn-sm" data-action="bp-apply:' + where + '">Применить</button>' +
+      '</div>' +
+      (s.error ? '<div class="field-error">' + esc(s.error) + '</div>' : '') +
+    '</div>'
+  );
+}
+
+/* На экране оплаты поле не мешает: сначала — ссылка «Есть промокод?». */
+function orderPromoSection(order) {
+  if (order.paymentMode === 'stars') return '';
+  if (order.promoActive) return promoCodeBlock('order', order.promoCode);
+  if (!state.orderPromo.open) {
+    return '<button type="button" class="linkish promo-open" data-action="bp-open">🎟 У меня есть промокод</button>';
+  }
+  return promoCodeBlock('order');
 }
 
 function viewPayment(order) {
   const b = state.boot;
   const mode = order.paymentMode;
-  const promo = orderPromo(order);
   let action = '';
   if (mode === 'demo') {
     action = '<button class="btn btn-primary" data-action="pay-demo">Имитировать оплату</button>' +
@@ -456,8 +512,9 @@ function viewPayment(order) {
     stepper(1) +
     '<h1>Оплата заказа</h1>' +
     '<p class="muted">Заказ ' + esc(order.code) + ' · ' + esc(order.productName) + ' · ' +
-      priceHtml(order.priceText, promo && promo.oldPriceText) + '</p>' +
+      priceHtml(order.priceText, orderOldPrice(order)) + '</p>' +
     '<div class="card">' +
+      orderPromoSection(order) +
       (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
       action +
     '</div>' +
@@ -489,15 +546,19 @@ function paymentDetails(order) {
 
 function amountRow(order) {
   // Сумма из .env важнее цены заказа: продавец может попросить другую.
-  const fixed = state.boot.payment && state.boot.payment.amount;
+  // Но о промокоде она не знает — с ним платят цену заказа.
+  const fixed = !order.promoActive && state.boot.payment && state.boot.payment.amount;
   const text = fixed || order.priceText;
-  const promo = fixed ? null : orderPromo(order);
+  const sale = fixed ? null : orderPromo(order);
+  const parts = [];
+  if (sale) parts.push(sale.label);
+  if (order.promoActive) parts.push('промокод ' + order.promoCode);
   return (
     '<div class="req-row">' +
       '<span class="req-text">' +
         '<span class="req-label">Сумма к оплате</span>' +
         '<span class="req-value">' + esc(text) + '</span>' +
-        (promo ? '<span class="req-note">Скидка уже учтена: ' + esc(promo.label) + '</span>' : '') +
+        (parts.length ? '<span class="req-note">Скидка уже учтена: ' + esc(parts.join(' и ')) + '</span>' : '') +
       '</span>' +
       copyButton('amount', 'сумму') +
     '</div>'
@@ -753,6 +814,7 @@ function startCheckout(slug) {
   state.checkoutApp = slug || null;
   state.newOrder = true;
   state.agreeTerms = false;
+  state.checkoutPromo = { code: '', check: null, error: '' };
   state.view = 'order';
   render();
 }
@@ -1116,7 +1178,7 @@ function sellerLine(o) {
     '<button class="order-line" data-action="seller-open:' + o.id + '">' +
       '<span class="status-dot ' + esc(o.status) + '"></span>' +
       '<span class="grow"><span class="code">' + esc(o.code) + '</span>' + testTag(o) + '<br>' +
-      '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.priceText) +
+      '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.priceText) + (o.promoActive ? ' 🎟' : '') +
       (o.username ? ' · @' + esc(o.username) : '') + '</span></span>' +
       (o.unread ? '<span class="count-badge">' + o.unread + '</span>' : '') +
       '<span class="meta">›</span>' +
@@ -1160,6 +1222,10 @@ function viewSellerOrder(o) {
         esc(o.firstName || '—') + (o.username ? ' @' + esc(o.username) : '') + '</span></div>' +
       '<div class="row"><span class="label">Telegram ID</span><span class="value mono">' + esc(o.userId) + '</span></div>' +
       '<div class="row"><span class="label">Сумма</span><span class="value">' + esc(o.priceText) + '</span></div>' +
+      (o.promoCode
+        ? '<div class="row"><span class="label">Промокод</span><span class="value">' + esc(o.promoCode) +
+            ' · −' + esc(o.promoDiscountText) + (o.promoActive ? '' : ' · применение возвращено') + '</span></div>'
+        : '') +
       '<div class="row"><span class="label">UDID</span>' + udidValue(o.udid, 'seller-udid') + '</div>' +
       '<div class="row"><span class="label">Создан</span><span class="value">' + esc(dateOf(o.createdAt)) + '</span></div>' +
       (o.note ? '<div class="row"><span class="label">Заметка</span><span class="value">' + esc(o.note) + '</span></div>' : '') +
@@ -1386,7 +1452,7 @@ function viewPromos() {
     '<button class="btn btn-primary mb" data-action="promo-new">＋ Новый промокод</button>' +
     '<div class="filters">' + chips + '</div>' + list +
     '<div class="cta-note">Покупатели промокодов не видят — публикуйте их сами, где нужно. ' +
-      'Ввести промокод в заказе можно будет на следующем этапе.</div>'
+      'Покупатель вводит код при оформлении заказа или на шаге оплаты, пока не отправил чек.</div>'
   );
 }
 
@@ -1423,7 +1489,23 @@ function viewPromo(p) {
     '<button class="btn btn-secondary" data-action="promo-edit">✏️ Изменить условия</button>' +
     '<button class="btn btn-secondary mt" data-action="promo-toggle">' + (p.enabled ? '⏸ Выключить' : '▶️ Включить') + '</button>' +
     deletePromoBlock(p) +
+    promoOrders(p.orders || []) +
     (history ? '<div class="card mt"><div class="card-title">История</div>' + history + '</div>' : '')
+  );
+}
+
+/* Заказы, которые сейчас занимают применения промокода. */
+function promoOrders(orders) {
+  if (!orders.length) return '';
+  return (
+    '<div class="card mt"><div class="card-title">Заказы с промокодом · ' + orders.length + '</div>' +
+      orders.map((o) => (
+        '<div class="hist-row">' +
+          '<div class="hist-head"><span>' + esc(o.code) + '</span><span class="meta">' + esc(o.priceText) + '</span></div>' +
+          '<div class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.buyer) + ' · скидка ' + esc(o.discountText) + '</div>' +
+        '</div>'
+      )).join('') +
+    '</div>'
   );
 }
 
@@ -2222,6 +2304,27 @@ function bindInputs() {
     });
   });
 
+  // Поле промокода покупателя: текст живёт в состоянии, Enter — «Применить».
+  ['checkout', 'order'].forEach((where) => {
+    const input = document.getElementById('promoInput-' + where);
+    if (!input) return;
+    const s = where === 'checkout' ? state.checkoutPromo : state.orderPromo;
+    input.addEventListener('input', () => {
+      s.code = input.value;
+      // Старая причина отказа к новому коду не относится.
+      if (s.error) {
+        s.error = '';
+        const error = input.closest('.promo-box').querySelector('.field-error');
+        if (error) error.remove();
+      }
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      applyBuyerPromo(where);
+    });
+  });
+
   // Код промокода — заглавными и без пробелов, как его сохранит сервер.
   const promoCode = document.getElementById('pfCode');
   if (promoCode) {
@@ -2293,7 +2396,8 @@ function copyValue(key) {
     text = order && order.code;
   } else if (key === 'amount') {
     // В банк удобнее вставлять голое число, без пробелов и знака рубля.
-    const shown = payment.amount || (order && order.priceText) || '';
+    const fixed = order && order.promoActive ? '' : payment.amount;
+    const shown = fixed || (order && order.priceText) || '';
     text = shown.replace(/[^\d.,]/g, '') || shown;
   } else if (key === 'udid') {
     const current = state.supplier.current;
@@ -2495,17 +2599,33 @@ const actions = {
   },
 
   'buy': () => guard(async () => {
+    const check = state.checkoutPromo.check;
     const data = await api('/api/order/create', {
       method: 'POST',
-      body: { app: state.checkoutApp },
+      body: { app: state.checkoutApp, promo: check ? check.code : '' },
     });
     state.boot.order = data.order;
     state.newOrder = false;
     state.checkoutApp = null;
+    state.checkoutPromo = { code: '', check: null, error: '' };
+    state.orderPromo = { open: false, code: '', error: '' };
     state.view = 'order';
-    toast('Заказ ' + data.order.code + ' создан');
+    if (data.promo && !data.promo.ok) {
+      // Пока оформляли, последнее применение могли занять: заказ есть, промокода нет.
+      state.orderPromo = { open: true, code: check.code, error: data.promo.message };
+      toast('Заказ ' + data.order.code + ' создан, но промокод не применился', true);
+    } else {
+      toast('Заказ ' + data.order.code + ' создан' + (data.promo ? ' со скидкой по промокоду' : ''));
+    }
     render();
   }),
+
+  'bp-open': () => {
+    state.orderPromo.open = true;
+    render();
+    const input = document.getElementById('promoInput-order');
+    if (input) input.focus();
+  },
 
   'receipt-pick': () => {
     const input = document.getElementById('receiptFile');
@@ -2814,6 +2934,55 @@ const actions = {
   }),
 };
 
+/* Промокод покупателя. На оформлении сервер только считает цену — применение
+   займёт само оформление; на экране оплаты промокод сразу применяется к заказу.
+   Отказ показываем под полем: причину нужно прочитать. */
+function applyBuyerPromo(where) {
+  const s = where === 'checkout' ? state.checkoutPromo : state.orderPromo;
+  const input = document.getElementById('promoInput-' + where);
+  s.code = ((input && input.value) || s.code || '').trim();
+  if (!s.code) {
+    s.error = 'Введите промокод.';
+    render();
+    return;
+  }
+  guard(async () => {
+    try {
+      if (where === 'checkout') {
+        const data = await api('/api/promo/check', { method: 'POST', body: { code: s.code, app: state.checkoutApp } });
+        s.check = data;
+        s.error = '';
+        toast('Скидка по промокоду ' + data.code + ': −' + data.discountText);
+      } else {
+        const data = await api('/api/order/promo', {
+          method: 'POST', body: { orderId: state.boot.order.id, code: s.code },
+        });
+        state.boot.order = data.order;
+        state.orderPromo = { open: false, code: '', error: '' };
+        toast(data.message);
+      }
+    } catch (err) {
+      s.error = err.message;
+      haptic('error');
+    }
+    render();
+  });
+}
+
+function removeBuyerPromo(where) {
+  if (where === 'checkout') {
+    state.checkoutPromo = { code: '', check: null, error: '' };
+    render();
+    return;
+  }
+  guard(async () => {
+    const data = await api('/api/order/promo/remove', { method: 'POST', body: { orderId: state.boot.order.id } });
+    state.boot.order = data.order;
+    toast('Промокод убран');
+    render();
+  });
+}
+
 function handleAction(raw) {
   if (actions[raw]) { haptic('light'); actions[raw](); return; }
 
@@ -2892,6 +3061,8 @@ function handleAction(raw) {
     else guard(async () => { await loadSellerOrders(); render(); });
     return;
   }
+  if (kind === 'bp-apply') { applyBuyerPromo(value); return; }
+  if (kind === 'bp-remove') { removeBuyerPromo(value); return; }
   if (kind === 'promo-filter') {
     state.seller.promo.status = value;
     guard(async () => { await loadPromos(); render(); });

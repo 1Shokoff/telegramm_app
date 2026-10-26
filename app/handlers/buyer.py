@@ -5,14 +5,21 @@ import logging
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
-from .. import catalog, const, db, keyboards, texts, udid as udid_mod
+from .. import catalog, const, db, keyboards, promocodes, texts, udid as udid_mod
 from ..config import ROOT, Config
 from ..service import OrderService, Receipt, ServiceError, find_link
 
 log = logging.getLogger(__name__)
 router = Router(name="buyer")
+
+
+class BuyerFlow(StatesGroup):
+    # Нажал «Ввести промокод» — следующее сообщение и есть код.
+    promo = State()
 
 WELCOME_PHOTO = ROOT / "app" / "assets" / "welcome.jpg"
 # После первой загрузки Telegram отдаёт file_id — дальше шлём по нему, файл не грузим заново.
@@ -280,7 +287,7 @@ async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
         "%s\nUDID укажете следующим шагом.\n\n"
         "%s"
         "Цена: %s — установка любых приложений каталога на одно устройство.\n"
-        "Оплата: %s\n\n"
+        "Оплата: %s\n%s\n"
         "%s%s"
         % (
             texts.e(cfg.product_title),
@@ -289,6 +296,7 @@ async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
             {"manual": "перевод с подтверждением", "demo": "демо, без списания", "stars": "Telegram Stars"}[
                 cfg.payment_mode
             ],
+            "🎟 Есть промокод — введёте на следующем шаге, под реквизитами.\n" if cfg.payment_mode != "stars" else "",
             texts.CONSENT_NOTE,
             texts.legal_footer(cfg),
         ),
@@ -311,23 +319,30 @@ async def nav_buy_confirm(call: CallbackQuery, cfg: Config, service: OrderServic
         await call.answer()
         return
 
+    kb = keyboards.payment_kb(order["id"], cfg.payment_mode, keyboards.held_promo(order))
     if cfg.payment_mode == "manual":
-        await call.message.answer(
-            texts.payment_instructions(order, cfg),
-            reply_markup=keyboards.payment_kb(order["id"], cfg.payment_mode),
-        )
+        await call.message.answer(texts.payment_instructions(order, cfg), reply_markup=kb)
     elif cfg.payment_mode == "demo":
         await call.message.answer(
             "Заказ <b>%s</b> создан. Режим демонстрации: деньги не списываются."
             % texts.e(order["code"]),
-            reply_markup=keyboards.payment_kb(order["id"], cfg.payment_mode),
+            reply_markup=kb,
         )
     else:
         await call.message.answer(
             "Заказ <b>%s</b> создан. Оплата в Telegram Stars." % texts.e(order["code"]),
-            reply_markup=keyboards.payment_kb(order["id"], cfg.payment_mode),
+            reply_markup=kb,
         )
     await call.answer()
+
+
+def _payment_text(cfg: Config, order: dict) -> str:
+    """Что платить после смены промокода: реквизиты с новой суммой."""
+    if order["payment_mode"] == "manual":
+        return texts.payment_instructions(order, cfg)
+    return "Заказ <b>%s</b> · к оплате <b>%s</b>. Режим демонстрации: деньги не списываются." % (
+        texts.e(order["code"]), texts.money(order["price_rub"])
+    )
 
 
 @router.callback_query(F.data == "nav:order")
@@ -436,6 +451,81 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
     )
     await call.message.answer("Запрос по заказу <b>%s</b> отправлен.\n%s" % (texts.e(order["code"]), contact))
     await call.answer()
+
+
+# ---------------------------------------------------------------------- промокод
+
+
+async def _own_new_order(call: CallbackQuery) -> dict | None:
+    """Заказ из кнопки — свой и ещё без чека; иначе объясняем и возвращаем None."""
+    parsed = keyboards.parse_cb(call.data)
+    order = await db.get_order(parsed[1]) if parsed else None
+    if not order or order["user_id"] != call.from_user.id:
+        await call.answer("Это не ваш заказ", show_alert=True)
+        return None
+    if order["status"] != const.NEW:
+        await call.answer("Промокод применяется до отправки чека.", show_alert=True)
+        return None
+    return order
+
+
+@router.callback_query(F.data.startswith("o:promo:"))
+async def cb_promo(call: CallbackQuery, state: FSMContext) -> None:
+    order = await _own_new_order(call)
+    if not order:
+        return
+    await state.set_state(BuyerFlow.promo)
+    await state.update_data(order_id=order["id"])
+    await call.message.answer(
+        texts.PROMO_ASK % texts.e(order["code"]), reply_markup=keyboards.promo_input_kb(order["id"])
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("o:promono:"))
+async def cb_promo_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.answer("Хорошо, без промокода")
+
+
+@router.callback_query(F.data.startswith("o:unpromo:"))
+async def cb_unpromo(call: CallbackQuery, cfg: Config, service: OrderService) -> None:
+    order = await _own_new_order(call)
+    if not order:
+        return
+    try:
+        order = await service.remove_promo(order["id"], call.from_user.id)
+    except ServiceError as exc:
+        await call.answer(str(exc), show_alert=True)
+        return
+    await call.message.answer(
+        "Промокод убран. К оплате — <b>%s</b>.\n\n%s" % (texts.money(order["price_rub"]), _payment_text(cfg, order)),
+        reply_markup=keyboards.buyer_order_kb(cfg, order),
+    )
+    await call.answer("Промокод убран")
+
+
+@router.message(StateFilter(BuyerFlow.promo), F.text)
+async def take_promo(message: Message, state: FSMContext, cfg: Config, service: OrderService) -> None:
+    order_id = (await state.get_data()).get("order_id")
+    await state.clear()
+    if not order_id or not promocodes.looks_like_code(message.text or ""):
+        # Похоже на вопрос, а не на код, — это обычное сообщение продавцу.
+        await free_text(message, cfg, service)
+        return
+    try:
+        order, reply = await service.apply_promo(order_id, message.text or "", message.from_user.id)
+    except ServiceError as exc:
+        order = await db.get_order(order_id)
+        await message.answer(
+            "❌ %s" % texts.e(str(exc)),
+            reply_markup=keyboards.buyer_order_kb(cfg, order) if order else None,
+        )
+        return
+    await message.answer(
+        "✅ %s\n\n%s" % (texts.e(reply), _payment_text(cfg, order)),
+        reply_markup=keyboards.buyer_order_kb(cfg, order),
+    )
 
 
 # ------------------------------------------------------------------ чек об оплате

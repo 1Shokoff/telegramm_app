@@ -43,7 +43,13 @@ CREATE TABLE IF NOT EXISTS orders (
     -- Покупатель убрал выполненный заказ с экрана; для продавца он остаётся выполненным.
     closed_at    TEXT,
     -- Заказ тестировщика из TEST_IDS: ставится при создании и не меняется.
-    is_test      INTEGER NOT NULL DEFAULT 0
+    is_test      INTEGER NOT NULL DEFAULT 0,
+    -- Промокод: price_rub уже со скидкой, promo_discount — сколько рублей она сняла.
+    -- promo_id есть, пока заказ занимает применение; у отменённого до оплаты он
+    -- снят, а код и скидка остаются для истории.
+    promo_id       INTEGER REFERENCES promo_codes(id) ON DELETE SET NULL,
+    promo_code     TEXT,
+    promo_discount INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user   ON orders(user_id);
@@ -162,6 +168,16 @@ async def _migrate() -> None:
     if "is_test" not in columns:
         await conn().execute("ALTER TABLE orders ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
         log.info("Миграция: добавлена колонка orders.is_test")
+    promo_columns = (
+        ("promo_id", "INTEGER REFERENCES promo_codes(id) ON DELETE SET NULL"),
+        ("promo_code", "TEXT"),
+        ("promo_discount", "INTEGER NOT NULL DEFAULT 0"),
+    )
+    for name, kind in promo_columns:
+        if name not in columns:
+            await conn().execute("ALTER TABLE orders ADD COLUMN %s %s" % (name, kind))
+            log.info("Миграция: добавлена колонка orders.%s", name)
+    await conn().execute("CREATE INDEX IF NOT EXISTS idx_orders_promo ON orders(promo_id, user_id)")
     events = {row["name"] for row in await _fetchall("PRAGMA table_info(events)")}
     if "promo_id" not in events:
         await conn().execute(
@@ -252,11 +268,14 @@ async def create_order(
     return order
 
 
-async def set_order_product(order_id: int, app_slug: str | None, price_rub: int) -> dict | None:
-    """Смена товара у неоплаченного заказа — покупатель передумал до оплаты."""
+async def set_order_product(
+    order_id: int, app_slug: str | None, price_rub: int, promo_discount: int = 0
+) -> dict | None:
+    """Смена товара или цены у неоплаченного заказа: покупатель передумал до
+    оплаты, сменилась цена или акция. promo_discount — скидка промокода в рублях."""
     await conn().execute(
-        "UPDATE orders SET app_slug = ?, price_rub = ?, updated_at = ? WHERE id = ?",
-        (app_slug, price_rub, now(), order_id),
+        "UPDATE orders SET app_slug = ?, price_rub = ?, promo_discount = ?, updated_at = ? WHERE id = ?",
+        (app_slug, price_rub, promo_discount, now(), order_id),
     )
     await conn().commit()
     await add_event(order_id, "system", "product", app_slug or "catalog")
@@ -497,6 +516,11 @@ async def delete_order(order_id: int, actor: str) -> dict | None:
     order = await get_order(order_id)
     if not order:
         return None
+    if order.get("promo_id"):
+        # Заказ занимал применение промокода — вместе с заказом оно возвращается.
+        await conn().execute(
+            "UPDATE promo_codes SET used = used - 1 WHERE id = ? AND used > 0", (order["promo_id"],)
+        )
     await conn().execute("DELETE FROM orders WHERE id = ?", (order_id,))
     await conn().execute(
         "INSERT INTO events (order_id, actor, type, detail, created_at) VALUES (NULL, ?, 'order_deleted', ?, ?)",
@@ -645,6 +669,89 @@ async def delete_promocode(promo_id: int, actor: str, detail: str) -> bool:
 async def list_promo_events(promo_id: int, limit: int = 30) -> list[dict]:
     return await _fetchall(
         "SELECT * FROM events WHERE promo_id = ? ORDER BY id DESC LIMIT ?", (promo_id, limit)
+    )
+
+
+async def promo_uses_by_user(promo_id: int, user_id: int, skip_order: int | None = None) -> int:
+    """Сколько заказов покупателя занимают применения промокода."""
+    row = await _fetchone(
+        "SELECT COUNT(*) AS n FROM orders WHERE promo_id = ? AND user_id = ? AND id != ?",
+        (promo_id, user_id, skip_order or 0),
+    )
+    return int(row["n"]) if row else 0
+
+
+async def hold_promocode(
+    order: dict, promo: dict, price_rub: int, discount: int, actor: str
+) -> bool:
+    """Заказ занимает применение промокода — или заменяет им прежний.
+
+    Лимиты «всего» и «на покупателя» проверяет сам UPDATE: два покупателя,
+    нажавшие «Применить» одновременно, не возьмут одно последнее применение.
+    False — лимит уже исчерпан.
+    """
+    ts = now()
+    cur = await conn().execute(
+        "UPDATE promo_codes SET used = used + 1 WHERE id = ? "
+        "AND (max_uses IS NULL OR used < max_uses) "
+        "AND (per_user IS NULL OR (SELECT COUNT(*) FROM orders "
+        "WHERE promo_id = ? AND user_id = ? AND id != ?) < per_user)",
+        (promo["id"], promo["id"], order["user_id"], order["id"]),
+    )
+    if not cur.rowcount:
+        return False
+    if order.get("promo_id"):
+        await conn().execute(
+            "UPDATE promo_codes SET used = used - 1 WHERE id = ? AND used > 0", (order["promo_id"],)
+        )
+    await conn().execute(
+        "UPDATE orders SET promo_id = ?, promo_code = ?, promo_discount = ?, price_rub = ?, updated_at = ? "
+        "WHERE id = ?",
+        (promo["id"], promo["code"], discount, price_rub, ts, order["id"]),
+    )
+    await conn().execute(
+        "INSERT INTO events (order_id, promo_id, actor, type, detail, created_at) VALUES (?, ?, ?, 'promo_applied', ?, ?)",
+        (order["id"], promo["id"], actor, "%s → заказ %s · скидка %d ₽" % (promo["code"], order["code"], discount), ts),
+    )
+    await conn().commit()
+    return True
+
+
+async def release_promocode(order: dict, actor: str, reason: str, price_rub: int | None = None) -> dict | None:
+    """Заказ отдаёт применение промокода обратно.
+
+    price_rub задан — промокод снимается с заказа совсем (покупатель его убрал),
+    и заказ стоит столько. Без него — заказ отменён до оплаты: код и скидка
+    остаются в нём для истории, но применение уже свободно.
+    """
+    if not order.get("promo_id"):
+        return order
+    ts = now()
+    await conn().execute(
+        "UPDATE promo_codes SET used = used - 1 WHERE id = ? AND used > 0", (order["promo_id"],)
+    )
+    if price_rub is None:
+        await conn().execute("UPDATE orders SET promo_id = NULL, updated_at = ? WHERE id = ?", (ts, order["id"]))
+    else:
+        await conn().execute(
+            "UPDATE orders SET promo_id = NULL, promo_code = NULL, promo_discount = 0, price_rub = ?, "
+            "updated_at = ? WHERE id = ?",
+            (price_rub, ts, order["id"]),
+        )
+    await conn().execute(
+        "INSERT INTO events (order_id, promo_id, actor, type, detail, created_at) VALUES (?, ?, ?, 'promo_released', ?, ?)",
+        (order["id"], order["promo_id"], actor, "%s ← заказ %s · %s" % (order["promo_code"], order["code"], reason), ts),
+    )
+    await conn().commit()
+    return await get_order(order["id"])
+
+
+async def list_promo_orders(promo_id: int, limit: int = 50) -> list[dict]:
+    """Заказы, которые занимают применения промокода, — для его карточки."""
+    return await _fetchall(
+        "SELECT o.*, u.username, u.first_name FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id "
+        "WHERE o.promo_id = ? ORDER BY o.id DESC LIMIT ?",
+        (promo_id, limit),
     )
 
 
