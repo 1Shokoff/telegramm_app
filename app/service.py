@@ -6,6 +6,7 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -621,6 +622,51 @@ class OrderService:
         else:
             await self.push_order_to_sellers(updated, "🚫 <b>Покупатель отменил заказ</b>", const.NOTIFY_STATUS)
         return updated
+
+    # ----------------------------------------------------------- автоотмена
+
+    async def expire_unpaid(self, moment: datetime | None = None) -> dict:
+        """Неоплаченный заказ без изменений ORDER_TTL_DAYS дней отменяется сам.
+
+        За сутки до отмены покупателю приходит напоминание. Об отмене пишем
+        только тем, кому напоминали: заказ, зависший ещё до автоотмены (или пока
+        бот не работал), уходит молча — через 20 дней сообщение скорее удивит.
+        Применение промокода при отмене возвращается в лимит.
+        """
+        ttl = self.cfg.order_ttl_days
+        done = {"reminded": 0, "cancelled": 0}
+        if ttl <= 0:
+            return done
+        moment = moment or datetime.now(timezone.utc)
+        cancel_before = (moment - timedelta(days=ttl)).isoformat(timespec="seconds")
+        remind_before = (moment - timedelta(days=ttl - 1)).isoformat(timespec="seconds")
+        days = texts.plural(ttl, "день", "дня", "дней")
+        for order in await db.stale_unpaid(remind_before):
+            try:
+                if order["updated_at"] < cancel_before:
+                    expired = await db.expire_order(order["id"], cancel_before, "автоотмена: нет оплаты %s" % days)
+                    if not expired:
+                        continue
+                    done["cancelled"] += 1
+                    if expired.get("promo_id"):
+                        async with self._promo_lock:
+                            await db.release_promocode(expired, "system", "заказ не оплачен — автоотмена")
+                    if order["reminded"] and expired["user_id"] != db.ANON_USER_ID:
+                        await self.send(expired["user_id"], texts.order_expired(expired, ttl),
+                                        kind=const.NOTIFY_STATUS, order_id=expired["id"])
+                elif not order["reminded"]:
+                    await db.add_event(order["id"], "system", "expire_reminder", "напоминание: завтра автоотмена")
+                    done["reminded"] += 1
+                    if order["user_id"] != db.ANON_USER_ID:
+                        await self.send(order["user_id"], texts.order_expire_soon(order),
+                                        keyboards.buyer_order_kb(self.cfg, order),
+                                        kind=const.NOTIFY_STATUS, order_id=order["id"])
+            except Exception:
+                # Сбой отправки одному покупателю не должен остановить остальных.
+                log.exception("Автоотмена: заказ %s", order["code"])
+        if done["cancelled"] or done["reminded"]:
+            log.info("Автоотмена: отменено %(cancelled)d, напомнили %(reminded)d", done)
+        return done
 
     # ------------------------------------------------------------ переписка
 

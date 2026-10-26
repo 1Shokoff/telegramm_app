@@ -134,6 +134,8 @@ class Config:
     init_data_ttl: int
     dev_mode: bool
     log_level: str
+    # Неоплаченный заказ без изменений столько дней — отменяется сам; 0 — не отменять.
+    order_ttl_days: int = 3
 
     @property
     def webapp_enabled(self) -> bool:
@@ -287,6 +289,13 @@ def load_config() -> Config:
             "в PROMO_PRICE_RUB — цена по акции"
         )
 
+    # За сутки до отмены бот напоминает об оплате — поэтому меньше двух дней нельзя.
+    ttl = _i("ORDER_TTL_DAYS", 3)
+    if ttl == 1 or ttl < 0:
+        raise SystemExit(
+            f"ORDER_TTL_DAYS={ttl}: от 2 дней (за сутки до отмены бот напоминает об оплате), 0 — не отменять"
+        )
+
     proxy = _s("TELEGRAM_PROXY")
     if proxy and "://" not in proxy:
         raise SystemExit(
@@ -335,4 +344,5 @@ def load_config() -> Config:
         init_data_ttl=_i("INIT_DATA_TTL", 86400),
         dev_mode=_b("DEV_MODE", False),
         log_level=_s("LOG_LEVEL", "INFO").upper(),
+        order_ttl_days=ttl,
     )

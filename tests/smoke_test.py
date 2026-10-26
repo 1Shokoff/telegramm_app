@@ -1394,6 +1394,144 @@ async def test_analytics(cfg) -> None:
     check("повторный /forget — данных нет", await db.forget_user(810) == {"user": False, "orders": 0})
 
 
+async def test_analytics_orders(cfg) -> None:
+    """Список продаж за период, день и месяц — из него сложились карточки и график."""
+    print("\nСписок продаж аналитики")
+    today = today_msk()
+    for key in ("today", "7d", "30d", "all"):
+        p = analytics.period(key)
+        listed = await analytics.sales(p)
+        report = (await analytics.report(p))["sales"]
+        check("%s: в списке ровно продажи из карточек" % key,
+              (listed["count"], listed["revenue"]) == (report["count"], report["revenue"]),
+              "%s / %s" % ((listed["count"], listed["revenue"]), report))
+    lost = await analytics.sales(analytics.period("30d"))
+    check("отменённые после оплаты — в списке, они тоже продажи",
+          any(r["status"] == const.CANCELLED for r in lost["rows"]))
+    check("тестовые и демо — нет",
+          all(not r["is_test"] and r["payment_mode"] != "demo" for r in (await analytics.sales(analytics.period("all")))["rows"]))
+    day = await analytics.sales(day=today)
+    points = (await analytics.report(analytics.period("7d")))["series"]["points"]
+    check("столбик дня = продажи этого дня", day["count"] == points[-1]["count"] and day["title"].startswith("Продажи за "),
+          "%s / %s" % (day["count"], points[-1]))
+    month = await analytics.sales(month=today.strftime("%Y-%m"))
+    check("месяц графика — все продажи месяца, по Москве",
+          month["count"] >= day["count"] and all(
+              datetime.fromisoformat(r["paid_at"]).astimezone(MSK).strftime("%Y-%m") == today.strftime("%Y-%m")
+              for r in month["rows"]))
+    try:
+        await analytics.sales(month="2026-13")
+        check("кривой месяц — ошибка", False)
+    except analytics.PeriodError:
+        check("кривой месяц — ошибка", True)
+
+    bot = FakeBot()
+    app = build_app(cfg, bot, OrderService(bot, cfg))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    seller = {"X-Init-Data": make_init_data(SELLER, "Продавец")}
+    try:
+        res = await client.get("/api/seller/analytics/orders", params={"period": "7d"}, headers=seller)
+        data = await res.json()
+        week = (await analytics.report(analytics.period("7d")))["sales"]["count"]
+        check("API: продажи за период", res.status == 200 and data["count"] == week == len(data["orders"]), str(data)[:200])
+        first = data["orders"][0]
+        check("API: в строке всё для карточки заказа", {"paidAt", "userId", "priceText", "promoCode"} <= set(first), str(first)[:200])
+        res = await client.get("/api/seller/analytics/orders", params={"day": today.isoformat()}, headers=seller)
+        check("API: продажи за день", res.status == 200 and (await res.json())["count"] == day["count"])
+        res = await client.get("/api/seller/analytics/orders", params={"month": "2026-13"}, headers=seller)
+        check("API: кривой месяц — 400", res.status == 400)
+        res = await client.get("/api/seller/analytics/orders", headers={"X-Init-Data": make_init_data(801)})
+        check("API: покупателю список продаж закрыт", res.status == 403)
+        res = await client.get("/api/seller/order", params={"id": first["id"]}, headers=seller)
+        check("API: карточка заказа по номеру", res.status == 200 and (await res.json())["order"]["code"] == first["code"])
+        res = await client.get("/api/seller/order", params={"id": 999999}, headers=seller)
+        check("API: нет заказа — 404", res.status == 404)
+        res = await client.get("/api/seller/order", params={"id": first["id"]}, headers={"X-Init-Data": make_init_data(801)})
+        check("API: покупателю чужой заказ не открыть", res.status == 403)
+    finally:
+        await client.close()
+
+
+async def test_expire(cfg) -> None:
+    """Автоотмена: напоминание за сутки, отмена через ORDER_TTL_DAYS, старые — молча."""
+    print("\nАвтоотмена неоплаченных")
+    bot = FakeBot()
+    svc = OrderService(bot, replace(cfg, order_ttl_days=3))
+    now = datetime.now(timezone.utc)
+
+    def ago(hours: float) -> str:
+        return (now - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+    async def make(uid: int, hours: float, status: str = const.NEW) -> dict:
+        await db.upsert_user(uid, "u%d" % uid, "Покупатель %d" % uid)
+        order = await db.create_order(uid, 1500, "manual", "NP")
+        await db.conn().execute("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?", (status, ago(hours), order["id"]))
+        await db.conn().commit()
+        return await db.get_order(order["id"])
+
+    fresh = await make(951, 20)
+    soon = await make(952, 60)
+    old = await make(953, 20 * 24)
+    checking = await make(954, 10 * 24, const.PAYMENT_CHECK)
+    promo = await promocodes.create({"code": "EXP-1", "kind": "percent", "value": 10, "maxUses": 5}, cfg, "seller:%d" % SELLER)
+    held = await make(955, 80)
+    await svc.apply_promo(held["id"], "EXP-1", 955)
+    await db.conn().execute("UPDATE orders SET updated_at = ? WHERE id = ?", (ago(80), held["id"]))
+    await db.conn().commit()
+
+    done = await svc.expire_unpaid(now)
+    check("напомнили тем, кому до отмены сутки", done["reminded"] == 1 and any("через сутки" in t for t in bot.to(952)),
+          str(done))
+    check("напоминание — с кнопками оплаты",
+          (await db.get_order(soon["id"]))["status"] == const.NEW
+          and any(ev["type"] == "expire_reminder" for ev in await db.list_events(soon["id"])))
+    check("свежий заказ не тронут", (await db.get_order(fresh["id"]))["status"] == const.NEW and not bot.to(951))
+    check("заказ на проверке оплаты не тронут", (await db.get_order(checking["id"]))["status"] == const.PAYMENT_CHECK)
+    check("зависший до автоотмены — отменён молча",
+          (await db.get_order(old["id"]))["status"] == const.CANCELLED and not bot.to(953))
+    check("в истории — автоотмена", any(
+        ev["type"] == "status:cancelled" and "автоотмена" in (ev["detail"] or "") for ev in await db.list_events(old["id"])))
+    check("отмена вернула применение промокода",
+          (await db.get_order(held["id"]))["status"] == const.CANCELLED and (await db.get_promocode(promo["id"]))["used"] == 0)
+
+    bot.sent.clear()
+    again = await svc.expire_unpaid(now + timedelta(hours=1))
+    check("повторная проверка второй раз не напоминает", again == {"reminded": 0, "cancelled": 0} and not bot.to(952), str(again))
+    later = await svc.expire_unpaid(now + timedelta(hours=13))
+    check("через сутки после напоминания — отмена с сообщением",
+          later["cancelled"] == 1 and (await db.get_order(soon["id"]))["status"] == const.CANCELLED
+          and any("отменён: оплаты не было 3 дня" in t for t in bot.to(952)), str(later))
+
+    acted = await make(956, 60)
+    await svc.expire_unpaid(now)
+    await db.add_message(acted["id"], db.BUYER, 956, "Оплачу вечером")
+    bot.sent.clear()
+    out = await svc.expire_unpaid(now + timedelta(hours=13))
+    check("покупатель что-то сделал — отсчёт заново, заказ жив",
+          out["cancelled"] == 0 and (await db.get_order(acted["id"]))["status"] == const.NEW)
+    paid = await make(957, 100)
+    await db.set_status(paid["id"], const.PAYMENT_CHECK, "user:957")
+    check("чек пришёл до отмены — заказ не отменён",
+          await db.expire_order(paid["id"], ago(-1), "тест") is None
+          and (await db.get_order(paid["id"]))["status"] == const.PAYMENT_CHECK)
+
+    off = OrderService(bot, replace(cfg, order_ttl_days=0))
+    stale = await make(958, 30 * 24)
+    check("ORDER_TTL_DAYS=0 — не отменяем", await off.expire_unpaid(now) == {"reminded": 0, "cancelled": 0}
+          and (await db.get_order(stale["id"]))["status"] == const.NEW)
+
+    os.environ["ORDER_TTL_DAYS"] = "1"
+    try:
+        load_config()
+        check("ORDER_TTL_DAYS=1 — понятная ошибка", False)
+    except SystemExit as exc:
+        check("ORDER_TTL_DAYS=1 — понятная ошибка", "от 2 дней" in str(exc), str(exc))
+    finally:
+        del os.environ["ORDER_TTL_DAYS"]
+    check("по умолчанию — 3 дня", load_config().order_ttl_days == 3)
+
+
 class NoEffectBot(FakeBot):
     """Клиент, где эффекты сообщений не поддерживаются: Telegram отвечает 400."""
 
@@ -1983,7 +2121,11 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "analytics.sqlite3"))
     await test_analytics(cfg)
+    await test_analytics_orders(cfg)
     await test_delete_and_effects(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "expire.sqlite3"))
+    await test_expire(cfg)
     await db.close()
     await db.init(os.path.join(tmp, "promocodes.sqlite3"))
     await test_promocodes(cfg)

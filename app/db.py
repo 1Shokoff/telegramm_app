@@ -484,6 +484,37 @@ async def close_order(order_id: int, actor: str) -> dict | None:
     return await get_order(order_id)
 
 
+async def stale_unpaid(before: str) -> list[dict]:
+    """Неоплаченные заказы, которые не менялись с момента before (UTC ISO).
+
+    reminded — напоминание об оплате уже ушло после последнего изменения заказа:
+    любое действие покупателя сдвигает updated_at, и отсчёт начинается заново.
+    """
+    return await _fetchall(
+        "SELECT o.*, EXISTS(SELECT 1 FROM events e WHERE e.order_id = o.id AND e.type = 'expire_reminder' "
+        "AND e.created_at >= o.updated_at) AS reminded "
+        "FROM orders o WHERE o.status = ? AND o.updated_at < ? ORDER BY o.id",
+        (const.NEW, before),
+    )
+
+
+async def expire_order(order_id: int, before: str, detail: str) -> dict | None:
+    """Бот отменяет неоплаченный заказ — только если он всё ещё не оплачен и не менялся.
+
+    Чек или сообщение, пришедшие в ту же секунду, отмену остановят: None.
+    """
+    ts = now()
+    cur = await conn().execute(
+        "UPDATE orders SET status = ?, updated_at = ? WHERE id = ? AND status = ? AND updated_at < ?",
+        (const.CANCELLED, ts, order_id, const.NEW, before),
+    )
+    await conn().commit()
+    if not cur.rowcount:
+        return None
+    await add_event(order_id, "system", "status:" + const.CANCELLED, detail)
+    return await get_order(order_id)
+
+
 async def set_payment_ref(order_id: int, ref: str) -> None:
     await conn().execute(
         "UPDATE orders SET payment_ref = ?, updated_at = ? WHERE id = ?", (ref, now(), order_id)

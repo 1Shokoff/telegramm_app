@@ -1212,9 +1212,12 @@ function udidValue(udid, key) {
   );
 }
 
+/* Куда ведёт «Назад» из карточки заказа: в тот раздел, откуда её открыли. */
+const SELLER_BACK = { orders: '← Все заказы', analytics: '← К списку продаж', promos: '← К промокоду' };
+
 function viewSellerOrder(o) {
   return (
-    '<button class="backlink" data-action="seller-back">← Все заказы</button>' +
+    '<button class="backlink" data-action="seller-back">' + (SELLER_BACK[state.seller.mode] || SELLER_BACK.orders) + '</button>' +
     '<div class="section-head"><h2>' + esc(o.code) + testTag(o) + '</h2>' +
       '<span class="badge">' + esc(o.statusTitle) + '</span></div>' +
     '<div class="card">' +
@@ -1239,7 +1242,7 @@ function viewSellerOrder(o) {
         (o.status === 'done' ? 'Закрыть заказ' : 'Отменить заказ') + '</button>'
       : '') +
     // Удаление из базы — только из группы «Все»: там лежат старые и тестовые заказы.
-    (state.seller.status === 'all' ? deleteOrderBlock(o) : '')
+    (state.seller.mode === 'orders' && state.seller.status === 'all' ? deleteOrderBlock(o) : '')
   );
 }
 
@@ -1301,49 +1304,190 @@ async function loadAnalytics() {
   state.seller.analytics = await api('/api/seller/analytics?' + params.toString());
 }
 
-function sellerModeSwitch() {
-  const mode = state.seller.mode;
-  const btn = (key, label) => (
-    '<button class="seg-btn' + (mode === key ? ' active' : '') + '" data-action="seller-mode:' + key + '" ' +
-      'aria-pressed="' + (mode === key) + '">' + label + '</button>'
+/* Переключатель-«таблетка»: подсветка переезжает под выбранную кнопку.
+   key — имя переключателя: по нему после перерисовки помним, откуда ехать. */
+function segControl(key, items, active, action) {
+  const index = Math.max(0, items.findIndex(([k]) => k === active));
+  return (
+    '<div class="seg" data-seg="' + key + '" style="--n:' + items.length + ';--i:' + index + '">' +
+      '<span class="seg-thumb" aria-hidden="true"></span>' +
+      items.map(([k, label]) => (
+        '<button type="button" class="seg-btn' + (k === active ? ' active' : '') + '" ' +
+          'data-action="' + action + ':' + k + '" aria-pressed="' + (k === active) + '">' + label + '</button>'
+      )).join('') +
+    '</div>'
   );
-  return '<div class="seg">' + btn('orders', 'Заказы') + btn('analytics', 'Аналитика') + btn('promos', 'Промокоды') + '</div>';
 }
 
+const segIndex = {};
+
+/* После перерисовки подсветка стоит уже на новом месте — ставим её туда,
+   где она была, и отпускаем: переход доигрывает CSS. */
+function animateSegs(root) {
+  root.querySelectorAll('.seg[data-seg]').forEach((el) => {
+    const key = el.dataset.seg;
+    const index = Number(el.style.getPropertyValue('--i')) || 0;
+    const prev = segIndex[key];
+    segIndex[key] = index;
+    if (prev === undefined || prev === index || REDUCED_MOTION) return;
+    const thumb = el.querySelector('.seg-thumb');
+    thumb.style.transition = 'none';
+    thumb.style.setProperty('--i', prev);
+    void thumb.offsetWidth;
+    thumb.style.transition = '';
+    thumb.style.removeProperty('--i');
+  });
+}
+
+/* Нажатие: подсветка едет сразу, не дожидаясь ответа сервера. */
+function slideSeg(key, value) {
+  const el = document.querySelector('.seg[data-seg="' + key + '"]');
+  if (!el) return;
+  const buttons = Array.prototype.slice.call(el.querySelectorAll('.seg-btn'));
+  const index = buttons.findIndex((b) => b.getAttribute('data-action').split(':')[1] === value);
+  if (index < 0) return;
+  el.style.setProperty('--i', index);
+  buttons.forEach((b, i) => {
+    b.classList.toggle('active', i === index);
+    b.setAttribute('aria-pressed', String(i === index));
+  });
+  segIndex[key] = index;
+}
+
+function sellerModeSwitch() {
+  return segControl('seller-mode',
+    [['orders', 'Заказы'], ['analytics', 'Аналитика'], ['promos', 'Промокоды']],
+    state.seller.mode, 'seller-mode');
+}
+
+/* Подпись столбика: «11.10» для дня, «10.26» для месяца. */
 function pointLabel(label, unit) {
   const parts = label.split('-');
-  return unit === 'day' ? parts[2] + '.' + parts[1] : parts[1] + '.' + parts[0];
+  return unit === 'day' ? parts[2] + '.' + parts[1] : parts[1] + '.' + parts[0].slice(2);
 }
 
-/* Столбики выручки: высота — доля от лучшего дня (месяца), подписи — по краям и в середине. */
+function salesWord(n) {
+  const tail = n % 100;
+  const last = n % 10;
+  if (tail >= 11 && tail <= 14) return n + ' продаж';
+  if (last === 1) return n + ' продажа';
+  if (last >= 2 && last <= 4) return n + ' продажи';
+  return n + ' продаж';
+}
+
+/* Продажи по дням (или месяцам): столбик — число продаж, слева шкала,
+   снизу подписан каждый день. Длинный период листается вбок, начиная с
+   последних дней. Нажатие на столбик — продажи этого дня. */
 function analyticsChart(series) {
   const points = series.points || [];
   if (!points.some((p) => p.count)) return '';
-  const max = Math.max.apply(null, points.map((p) => p.revenue)) || 1;
+  const unit = series.unit;
+  const max = Math.max.apply(null, points.map((p) => p.count));
+  const step = Math.max(1, Math.ceil(max / 4));
+  const top = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= top; v += step) ticks.push(v);
   const best = points.reduce((a, b) => (b.revenue > a.revenue ? b : a));
-  const bars = points.map((p, i) => {
-    const h = p.revenue ? Math.max(4, Math.round(p.revenue * 100 / max)) : 0;
-    return '<span class="bar' + (p.revenue ? '' : ' empty') + '" style="--i:' + i + ';height:' + (h || 2) + '%" ' +
-      'title="' + esc(pointLabel(p.label, series.unit) + ': ' + p.count + ' · ' + rub(p.revenue)) + '"></span>';
+  const cols = points.map((p, i) => {
+    const label = pointLabel(p.label, unit);
+    const x = '<span class="bar-x">' + esc(label) + '</span>';
+    if (!p.count) {
+      return '<span class="bar-col empty" style="--i:' + i + '"><span class="bar-plot"><span class="bar"></span></span>' + x + '</span>';
+    }
+    const about = label + ': ' + salesWord(p.count) + ' на ' + rub(p.revenue);
+    return (
+      '<button type="button" class="bar-col" style="--i:' + i + '" data-action="an-bar:' + esc(p.label) + '" ' +
+        'title="' + esc(about) + '" aria-label="' + esc(about) + '">' +
+        '<span class="bar-plot"><span class="bar" style="height:' + (p.count * 100 / top) + '%"></span></span>' + x +
+      '</button>'
+    );
   }).join('');
-  const mid = points[Math.floor(points.length / 2)];
-  const axis = points.length > 1
-    ? '<div class="chart-axis"><span>' + esc(pointLabel(points[0].label, series.unit)) + '</span>' +
-        (points.length > 2 ? '<span>' + esc(pointLabel(mid.label, series.unit)) + '</span>' : '') +
-        '<span>' + esc(pointLabel(points[points.length - 1].label, series.unit)) + '</span></div>'
-    : '';
+  const at = (v) => 'bottom:' + (v * 100 / top) + '%';
   return (
     '<div class="card">' +
-      '<div class="card-title">Выручка ' + (series.unit === 'day' ? 'по дням' : 'по месяцам') + '</div>' +
-      '<div class="chart" role="img" aria-label="Выручка за период">' + bars + '</div>' + axis +
-      '<div class="cta-note">Лучший ' + (series.unit === 'day' ? 'день' : 'месяц') + ': ' +
-        esc(pointLabel(best.label, series.unit)) + ' — ' + best.count + ' · ' + rub(best.revenue) + '</div>' +
+      '<div class="card-title">Продажи по ' + (unit === 'day' ? 'дням' : 'месяцам') + '</div>' +
+      '<div class="chart2">' +
+        '<div class="chart-y" aria-hidden="true">' +
+          ticks.map((v) => '<span style="' + at(v) + '">' + v + '</span>').join('') +
+        '</div>' +
+        '<div class="chart-scroll"><div class="chart-plot" style="--cols:' + points.length + '">' +
+          '<div class="chart-grid" aria-hidden="true">' +
+            ticks.map((v) => '<span style="' + at(v) + '"></span>').join('') +
+          '</div>' + cols +
+        '</div></div>' +
+      '</div>' +
+      '<div class="cta-note">Нажмите на столбик — продажи за этот ' + (unit === 'day' ? 'день' : 'месяц') + '. ' +
+        'Лучший: ' + esc(pointLabel(best.label, unit)) + ' — ' + salesWord(best.count) + ' на ' + rub(best.revenue) + '</div>' +
     '</div>'
+  );
+}
+
+/* Продажи, из которых сложилась аналитика: за период, день или месяц графика. */
+async function openSales(extra) {
+  const params = new URLSearchParams();
+  if (extra && extra.day) params.set('day', extra.day);
+  else if (extra && extra.month) params.set('month', extra.month);
+  else {
+    const p = analyticsPeriod();
+    params.set('period', p.key);
+    if (p.key === 'custom') {
+      if (p.from) params.set('from', p.from);
+      if (p.to) params.set('to', p.to);
+    }
+  }
+  state.seller.anList = await api('/api/seller/analytics/orders?' + params.toString());
+}
+
+/* Время оплаты по Москве: по московским суткам считаются и столбики графика,
+   иначе продажа в 01:00 на телефоне с другим поясом «уезжала» бы в соседний день. */
+function mskTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleString('ru-RU', {
+      timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  } catch (e) {
+    return dateOf(iso);
+  }
+}
+
+function saleLine(o) {
+  const paid = o.paidAt ? mskTime(o.paidAt) : '';
+  const lost = o.status === 'cancelled';
+  return (
+    '<button class="order-line" data-action="seller-order:' + o.id + '">' +
+      '<span class="status-dot ' + esc(o.status) + '"></span>' +
+      '<span class="grow"><span class="code">' + esc(o.code) + '</span>' +
+        (lost ? ' <span class="test-tag">отменено после оплаты</span>' : '') + '<br>' +
+        '<span class="meta">' + esc(paid) + ' · ' + esc(o.priceText) + (o.promoCode ? ' 🎟' : '') +
+        (o.username ? ' · @' + esc(o.username) : (o.firstName ? ' · ' + esc(o.firstName) : '')) + '</span></span>' +
+      '<span class="meta">›</span>' +
+    '</button>'
+  );
+}
+
+function viewSalesList(l) {
+  return (
+    '<button class="backlink" data-action="an-list-back">← Аналитика</button>' +
+    '<h2>' + esc(l.title) + '</h2>' +
+    (l.datesText ? '<div class="muted an-dates">' + esc(l.datesText) + '</div>' : '') +
+    '<div class="metrics mt">' +
+      '<div class="metric"><div class="metric-label">Продажи</div><div class="metric-value">' + l.count + '</div></div>' +
+      '<div class="metric"><div class="metric-label">Выручка</div><div class="metric-value">' + esc(l.revenueText) + '</div></div>' +
+    '</div>' +
+    (l.orders.length
+      ? l.orders.map(saleLine).join('')
+      : '<div class="notice">Продаж нет.</div>') +
+    (l.count >= 500 ? '<div class="cta-note">Показаны 500 последних — сузьте период.</div>' : '') +
+    '<div class="cta-note">Продажа — заказ с подтверждённой оплатой, по дате подтверждения. ' +
+      'Нажмите на заказ, чтобы открыть его карточку.</div>'
   );
 }
 
 function viewAnalytics() {
   const s = state.seller;
+  if (s.anList) return viewSalesList(s.anList);
   const p = analyticsPeriod();
   const r = s.analytics;
   const chips = ANALYTICS_PERIODS.map(([key, label]) => (
@@ -1362,11 +1506,14 @@ function viewAnalytics() {
       (p.key === 'custom' ? 'Укажите даты периода.' : 'Загружаем…') + '</div>';
   }
 
+  // Карточка показателя — кнопка: открывает продажи, из которых он сложился.
   const metric = (label, value, count, format) => (
-    '<div class="metric"><div class="metric-label">' + esc(label) + '</div>' +
-      '<div class="metric-value"' +
+    '<button type="button" class="metric metric-link" data-action="an-sales"' +
+      (r.sales.count ? '' : ' disabled') + '>' +
+      '<span class="metric-label">' + esc(label) + (r.sales.count ? '<span class="metric-more">›</span>' : '') + '</span>' +
+      '<span class="metric-value"' +
         (count != null ? ' data-count="' + count + '" data-format="' + (format || 'int') + '"' : '') + '>' +
-        esc(value) + '</div></div>'
+        esc(value) + '</span></button>'
   );
   const lost = r.cancelledAfterPaid;
   const statuses = r.statuses.map((st) => (
@@ -1394,7 +1541,7 @@ function viewAnalytics() {
       (statuses || '<div class="muted">Новых заказов за период нет.</div>') +
     '</div>' +
     '<div class="cta-note">Продажа — заказ с подтверждённой оплатой, по дате подтверждения. ' +
-      'Тестовые заказы и демо-оплата не учитываются.</div>'
+      'Тестовые заказы и демо-оплата не учитываются. Нажмите на показатель — откроется список продаж.</div>'
   );
 }
 
@@ -1494,16 +1641,17 @@ function viewPromo(p) {
   );
 }
 
-/* Заказы, которые сейчас занимают применения промокода. */
+/* Заказы, которые сейчас занимают применения промокода. Нажатие — карточка заказа. */
 function promoOrders(orders) {
   if (!orders.length) return '';
   return (
     '<div class="card mt"><div class="card-title">Заказы с промокодом · ' + orders.length + '</div>' +
       orders.map((o) => (
-        '<div class="hist-row">' +
-          '<div class="hist-head"><span>' + esc(o.code) + '</span><span class="meta">' + esc(o.priceText) + '</span></div>' +
-          '<div class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.buyer) + ' · скидка ' + esc(o.discountText) + '</div>' +
-        '</div>'
+        '<button type="button" class="hist-row hist-link" data-action="seller-order:' + o.id + '">' +
+          '<span class="hist-head"><span class="hist-code">' + esc(o.code) + ' ›</span>' +
+            '<span class="meta">' + esc(o.priceText) + '</span></span>' +
+          '<span class="meta">' + esc(o.statusTitle) + ' · ' + esc(o.buyer) + ' · скидка ' + esc(o.discountText) + '</span>' +
+        '</button>'
       )).join('') +
     '</div>'
   );
@@ -1542,22 +1690,57 @@ function numberInput(id, value, placeholder) {
     'value="' + esc(value) + '" placeholder="' + esc(placeholder) + '">';
 }
 
+/* Значок «другой код»: круговая стрелка, одним цветом с текстом кнопки. */
+const REGENERATE_ICON =
+  '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>';
+
+/* Дата по Москве через days дней — для быстрого выбора срока. */
+function mskDate(days) {
+  return new Date(Date.now() + 3 * 3600 * 1000 + (days || 0) * 86400 * 1000).toISOString().slice(0, 10);
+}
+
+function monthEnd() {
+  const [y, m] = mskDate(0).split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+/* Быстрый срок: бессрочно, неделя, месяц, до конца месяца — с сегодняшнего дня. */
+const PROMO_TERMS = [['none', 'Бессрочно'], ['7', '7 дней'], ['30', '30 дней'], ['month', 'До конца месяца']];
+
+function termDates(key) {
+  if (key === 'none') return ['', ''];
+  if (key === 'month') return [mskDate(0), monthEnd()];
+  return [mskDate(0), mskDate(Number(key) - 1)];
+}
+
+function promoTerms(f) {
+  return PROMO_TERMS.map(([key, label]) => {
+    const [from, to] = termDates(key);
+    const on = f.startsOn === from && f.endsOn === to;
+    return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-action="pf-term:' + key + '" ' +
+      'aria-pressed="' + on + '">' + label + '</button>';
+  }).join('');
+}
+
+/* Поле внутри группы: подпись над ним, во всю ширину колонки. */
+function miniField(id, label, control) {
+  return '<label class="pf-mini" for="' + id + '"><span class="pf-mini-label">' + esc(label) + '</span>' + control + '</label>';
+}
+
 /* Форма создания и правки. Значения живут в state.seller.promo.form:
    перед перерисовкой (смена типа скидки, ошибка) их снимает readPromoForm. */
 function viewPromoForm(f) {
   const isNew = !f.id;
-  const kindBtn = (key, label) => (
-    '<button type="button" class="seg-btn' + (f.kind === key ? ' active' : '') + '" data-action="pf-kind:' + key + '" ' +
-      'aria-pressed="' + (f.kind === key) + '">' + label + '</button>'
-  );
   const code = isNew
     ? promoField('pfCode', 'Код',
         '<div class="input-row"><input id="pfCode" class="pf-code" value="' + esc(f.code) + '" maxlength="32" ' +
           'autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false">' +
           // Кнопка — одним значком: на узком экране случайный код иначе не влезает в поле.
-          '<button type="button" class="btn btn-secondary btn-sm pf-dice" data-action="pf-generate" ' +
-            'aria-label="Сгенерировать другой код" title="Сгенерировать другой код">🎲</button></div>',
-        'Латиница, цифры и дефис; 🎲 — другой случайный код. После создания код не меняется.')
+          '<button type="button" class="btn btn-secondary btn-sm pf-regen" data-action="pf-generate" ' +
+            'aria-label="Сгенерировать другой код" title="Сгенерировать другой код">' + REGENERATE_ICON + '</button></div>',
+        'Латиница, цифры и дефис; кнопка справа — другой случайный код. После создания код не меняется.')
     : promoField('', 'Код', '<div class="pf-code pf-fixed">' + esc(f.code) + '</div>', 'Код после создания не меняется.');
   return (
     '<button class="backlink" data-action="promo-form-back">← ' + (isNew ? 'Все промокоды' : 'К промокоду') + '</button>' +
@@ -1565,20 +1748,28 @@ function viewPromoForm(f) {
     '<div class="card pform mt">' +
       code +
       promoField('pfValue', 'Скидка',
-        '<div class="seg">' + kindBtn('percent', 'В процентах') + kindBtn('rub', 'В рублях') + '</div>' +
+        segControl('pf-kind', [['percent', 'В процентах'], ['rub', 'В рублях']], f.kind, 'pf-kind') +
         '<div class="input-suffix">' + numberInput('pfValue', f.value, f.kind === 'rub' ? '500' : '20') +
           '<span>' + (f.kind === 'rub' ? '₽' : '%') + '</span></div>',
         f.kind === 'rub'
           ? 'Меньше цены: бесплатных промокодов нет.'
           : 'От 1 до 99%. Во время акции — от цены по акции.') +
-      '<div class="pf-pair">' +
-        promoField('pfStarts', 'Действует с', '<input id="pfStarts" type="date" value="' + esc(f.startsOn) + '">') +
-        promoField('pfEnds', 'по', '<input id="pfEnds" type="date" value="' + esc(f.endsOn) + '">') +
+      '<div class="pf-group">' +
+        '<div class="pf-group-head"><span class="pf-group-title">Срок действия</span>' +
+          '<span class="pf-group-hint">по Москве, включительно</span></div>' +
+        '<div class="pf-chips">' + promoTerms(f) + '</div>' +
+        '<div class="pf-pair">' +
+          miniField('pfStarts', 'С', '<input id="pfStarts" type="date" value="' + esc(f.startsOn) + '">') +
+          miniField('pfEnds', 'По', '<input id="pfEnds" type="date" value="' + esc(f.endsOn) + '">') +
+        '</div>' +
       '</div>' +
-      '<div class="field-hint">Даты по Москве, включительно. Пусто — без ограничения.</div>' +
-      '<div class="pf-pair">' +
-        promoField('pfMax', 'Всего применений', numberInput('pfMax', f.maxUses, 'без лимита')) +
-        promoField('pfPer', 'На покупателя', numberInput('pfPer', f.perUser, 'без лимита')) +
+      '<div class="pf-group">' +
+        '<div class="pf-group-head"><span class="pf-group-title">Лимиты применений</span>' +
+          '<span class="pf-group-hint">пусто — без лимита</span></div>' +
+        '<div class="pf-pair">' +
+          miniField('pfMax', 'Всего', numberInput('pfMax', f.maxUses, 'без лимита')) +
+          miniField('pfPer', 'На покупателя', numberInput('pfPer', f.perUser, 'без лимита')) +
+        '</div>' +
       '</div>' +
       promoField('pfNote', 'Заметка для продавцов',
         '<textarea id="pfNote" maxlength="300" placeholder="Где опубликован, для кого">' + esc(f.note) + '</textarea>',
@@ -1617,8 +1808,9 @@ function promoForm(p) {
 
 function viewSeller() {
   const s = state.seller;
-  if (s.mode === 'promos') return viewPromos();
+  // Карточка заказа открывается и из аналитики, и из промокода — поверх их экранов.
   if (s.current) return viewSellerOrder(s.current);
+  if (s.mode === 'promos') return viewPromos();
   if (s.mode === 'analytics') return viewAnalytics();
 
   const filters = [['open', 'Открытые'], ['payment_check', 'Проверить оплату'], ['udid', 'Ставить сертификат'],
@@ -1958,11 +2150,15 @@ function screenKey() {
     if (state.newOrder) return 'order:new:' + (state.checkoutApp || 'catalog');
     return 'order:' + (o ? o.id + ':' + o.status : 'none');
   }
-  if (state.view === 'seller' && state.seller.mode === 'promos') {
-    const p = state.seller.promo;
-    return 'seller:promos:' + (p.form ? 'form:' + (p.form.id || 'new') : (p.current ? p.current.id : 'list'));
+  if (state.view === 'seller') {
+    // Смена раздела (заказы, аналитика, промокоды) — новый экран: он появляется волной.
+    const s = state.seller;
+    const p = s.promo;
+    if (s.current) return 'seller:order:' + s.current.id;
+    if (s.mode === 'promos') return 'seller:promos:' + (p.form ? 'form:' + (p.form.id || 'new') : (p.current ? p.current.id : 'list'));
+    if (s.mode === 'analytics') return 'seller:analytics:' + (s.anList ? 'list:' + s.anList.title : 'report');
+    return 'seller:orders';
   }
-  if (state.view === 'seller') return 'seller:' + (state.seller.current ? state.seller.current.id : 'list');
   if (state.view === 'supplier') return 'supplier:' + (state.supplier.current ? state.supplier.current.id : 'list');
   return state.view;
 }
@@ -1989,6 +2185,7 @@ function render() {
   // Подвал с реквизитами и документами обязателен на каждом экране,
   // кроме переписки — там снизу поле ввода.
   root.innerHTML = (views[state.view] || viewHome)() + (state.view === 'chat' ? '' : footerHtml());
+  animateSegs(root);
   document.getElementById('tabbar').innerHTML = tabbar();
 
   const sub = document.getElementById('brandSub');
@@ -2038,6 +2235,7 @@ function updateBackButton() {
   const nested = TABS.indexOf(state.view) === -1
     || (state.view === 'seller' && !!state.seller.current)
     || (state.view === 'seller' && promoNested())
+    || (state.view === 'seller' && state.seller.mode === 'analytics' && !!state.seller.anList)
     || (state.view === 'supplier' && !!state.supplier.current);
   if (nested) tg.BackButton.show();
   else tg.BackButton.hide();
@@ -2218,6 +2416,22 @@ function normalizeUdid(value) {
 
 function bindInputs() {
   document.querySelectorAll('.filters, .stepper').forEach((el) => bindScrollX(el));
+  // График длинного периода начинается с последних дней — они важнее.
+  document.querySelectorAll('.chart-scroll').forEach((el) => {
+    el.scrollLeft = el.scrollWidth;
+    bindScrollX(el);
+  });
+
+  // Дату выбрали руками — подсветка быстрого срока следует за ней.
+  ['pfStarts', 'pfEnds'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener('change', () => {
+      readPromoForm();
+      const chips = document.querySelector('.pf-chips');
+      if (chips && state.seller.promo.form) chips.innerHTML = promoTerms(state.seller.promo.form);
+    });
+  });
   document.querySelectorAll('.instr-steps').forEach((el) => bindPager(el));
 
   const udid = document.getElementById('udidInput');
@@ -2586,6 +2800,12 @@ async function sellerAction(action, extra) {
   const body = Object.assign({ action, orderId: current.id }, extra || {});
   const data = await api('/api/seller/action', { method: 'POST', body });
   state.seller.current = data.order;
+  // Заказ открыт из списка продаж — там он тоже должен стать новым.
+  const list = state.seller.anList && state.seller.anList.orders;
+  if (list) {
+    const i = list.findIndex((o) => o.id === data.order.id);
+    if (i >= 0) list[i] = Object.assign({}, list[i], data.order);
+  }
   await loadSellerOrders();
   toast(SELLER_ACTION_DONE[action] || 'Готово');
 }
@@ -2895,6 +3115,10 @@ const actions = {
 
   'promo-form-back': () => { state.seller.promo.form = null; render(); },
 
+  'an-sales': () => guard(async () => { await openSales(null); render(); }),
+
+  'an-list-back': () => { state.seller.anList = null; render(); },
+
   'promo-back': () => {
     state.seller.promo.current = null;
     state.seller.promo.confirmDelete = false;
@@ -2990,6 +3214,7 @@ function handleAction(raw) {
   if (kind === 'tab') {
     state.view = value;
     state.seller.current = null;
+    state.seller.anList = null;
     state.seller.promo.current = null;
     state.seller.promo.form = null;
     state.supplier.current = null;
@@ -3055,7 +3280,9 @@ function handleAction(raw) {
     return;
   }
   if (kind === 'seller-mode') {
+    slideSeg('seller-mode', value);
     state.seller.mode = value;
+    state.seller.anList = null;
     if (value === 'analytics') guard(async () => { await loadAnalytics(); render(); });
     else if (value === 'promos') guard(async () => { await loadPromos(); render(); });
     else guard(async () => { await loadSellerOrders(); render(); });
@@ -3078,7 +3305,30 @@ function handleAction(raw) {
     render();
     return;
   }
+  if (kind === 'pf-term') {
+    readPromoForm();
+    const f = state.seller.promo.form;
+    if (f) [f.startsOn, f.endsOn] = termDates(value);
+    render();
+    return;
+  }
+  if (kind === 'an-bar') {
+    // 2026-10-11 — день, 2026-10 — месяц графика.
+    guard(async () => { await openSales(value.length > 7 ? { day: value } : { month: value }); render(); });
+    return;
+  }
+  if (kind === 'seller-order') {
+    guard(async () => {
+      const list = state.seller.anList && state.seller.anList.orders;
+      const found = list && list.find((o) => String(o.id) === value);
+      state.seller.current = found || (await api('/api/seller/order?id=' + encodeURIComponent(value))).order;
+      state.seller.confirmDelete = false;
+      render();
+    });
+    return;
+  }
   if (kind === 'an-period') {
+    state.seller.anList = null;
     analyticsPeriod().key = value;
     saveAnalyticsPeriod();
     guard(async () => { await loadAnalytics(); render(); });
@@ -3172,6 +3422,12 @@ async function boot() {
     if (tg.BackButton) {
       tg.BackButton.onClick(() => {
         if (state.view === 'doc') { handleAction('doc-back'); return; }
+        // Карточка заказа поверх аналитики или промокода — назад к ним.
+        if (state.view === 'seller' && state.seller.current) { handleAction('seller-back'); return; }
+        if (state.view === 'seller' && state.seller.mode === 'analytics' && state.seller.anList) {
+          handleAction('an-list-back');
+          return;
+        }
         if (state.view === 'seller' && promoNested()) {
           handleAction(state.seller.promo.form ? 'promo-form-back' : 'promo-back');
           return;

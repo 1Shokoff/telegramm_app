@@ -224,6 +224,7 @@ def order_public(order: dict | None, *, full: bool = False) -> dict | None:
         "isTest": bool(order.get("is_test")),
         # Оплата подтверждалась — заказ входит в продажи, даже если потом отменён.
         "paid": bool(order.get("paid_at")),
+        "paidAt": order.get("paid_at"),
         # Промокод: price уже со скидкой, basePrice — без него (с акцией).
         "basePrice": texts.base_price(order),
         "basePriceText": texts.money(texts.base_price(order)),
@@ -801,14 +802,59 @@ async def seller_analytics(request: web.Request) -> web.Response:
     period=today|7d|30d|month|all, либо period=custom с from/to (2026-10-20).
     """
     await require_seller(request)
+    return web.json_response(await analytics.report(period_of(request)))
+
+
+def period_of(request: web.Request) -> analytics.Period:
+    """Период аналитики из адреса: period=today|7d|30d|month|all или custom с from/to."""
     key = request.query.get("period") or "all"
     try:
         start = analytics.parse_date(request.query["from"]) if request.query.get("from") else None
         end = analytics.parse_date(request.query["to"]) if request.query.get("to") else None
-        period = analytics.period(key, start, end)
+        return analytics.period(key, start, end)
     except analytics.PeriodError as exc:
         raise ApiError(str(exc))
-    return web.json_response(await analytics.report(period))
+
+
+@routes.get("/api/seller/analytics/orders")
+async def seller_analytics_orders(request: web.Request) -> web.Response:
+    """Заказы, из которых сложилась аналитика: за период (карточки показателей),
+    за день (day=2026-10-11) или за месяц (month=2026-10) — столбик графика."""
+    await require_seller(request)
+    try:
+        if request.query.get("day"):
+            found = await analytics.sales(day=analytics.parse_date(request.query["day"]))
+        elif request.query.get("month"):
+            found = await analytics.sales(month=request.query["month"])
+        else:
+            found = await analytics.sales(period_of(request))
+    except analytics.PeriodError as exc:
+        raise ApiError(str(exc))
+    unread = await db.unread_by_order(db.SELLER)
+    orders = []
+    for row in found.pop("rows"):
+        item = order_public(row, full=True)
+        assert item is not None
+        item["unread"] = unread.get(row["id"], 0)
+        orders.append(item)
+    return web.json_response(dict(found, revenueText=texts.money(found["revenue"]), orders=orders))
+
+
+@routes.get("/api/seller/order")
+async def seller_order(request: web.Request) -> web.Response:
+    """Один заказ для карточки продавца — например, из промокода или аналитики."""
+    await require_seller(request)
+    try:
+        order_id = int(request.query.get("id", 0))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный id заказа")
+    order = await db.get_order(order_id)
+    if not order:
+        raise ApiError("Заказ не найден — возможно, его удалили.", status=404)
+    item = order_public(await with_user(order), full=True)
+    assert item is not None
+    item["unread"] = await db.unread_count(order_id, db.SELLER)
+    return web.json_response({"order": item})
 
 
 @routes.post("/api/seller/action")

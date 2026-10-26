@@ -231,6 +231,51 @@ async def report(p: Period) -> dict:
     }
 
 
+_MONTH = re.compile(r"^(\d{4})-(\d{2})$")
+MONTHS = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
+# Больше этого списком не показываем — для отчёта хватает, телефон не задыхается.
+SALES_LIMIT = 500
+
+
+async def sales(p: Period | None = None, day: date | None = None, month: str | None = None) -> dict:
+    """Продажи списком: за период, за день или за месяц графика (по Москве).
+
+    Те же заказы, что в карточках «Продажи» и «Выручка», включая отменённые
+    после оплаты. Свежие сверху.
+    """
+    if day is not None:
+        title, dates = "Продажи за %s" % _day(day), day.strftime("%d.%m.%Y")
+        bounds = (_utc(day), _utc(day + timedelta(days=1)))
+    elif month is not None:
+        match = _MONTH.match(month)
+        if not match or not 1 <= int(match.group(2)) <= 12:
+            raise PeriodError("Месяц пишется как 2026-10: «%s» не разобрать." % month)
+        start = date(int(match.group(1)), int(match.group(2)), 1)
+        title, dates = "Продажи за %s %d" % (MONTHS[start.month - 1], start.year), ""
+        bounds = (_utc(start), _utc((start + timedelta(days=32)).replace(day=1)))
+    else:
+        p = p or period("all")
+        title, dates = "Продажи · %s" % p.title, p.dates_text
+        bounds = p.bounds
+    paid_sql, paid_args = _range("o.paid_at", bounds)
+    rows = await db._fetchall(
+        "SELECT o.*, u.username, u.first_name FROM orders o LEFT JOIN users u ON u.tg_id = o.user_id "
+        "WHERE o.paid_at IS NOT NULL AND o.is_test = 0 AND o.payment_mode != 'demo'%s "
+        "ORDER BY o.paid_at DESC, o.id DESC LIMIT %d" % (paid_sql, SALES_LIMIT),
+        paid_args,
+    )
+    return {
+        "title": title,
+        "datesText": dates,
+        "count": len(rows),
+        "revenue": sum(int(r["price_rub"]) for r in rows),
+        "rows": rows,
+    }
+
+
 async def _series(p: Period, paid_sql: str, paid_args: list) -> dict:
     """Продажи по дням (или по месяцам для длинного периода) — для графика."""
     start, end = p.start, p.end

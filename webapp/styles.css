@@ -752,8 +752,21 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
   flex: 1; border: 0; border-radius: 999px; padding: 9px 10px;
   background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600;
   cursor: pointer;
+  position: relative; z-index: 1;
+  transition: color .3s ease;
 }
-.seg-btn.active { background: var(--accent); color: var(--accent-text); }
+.seg-btn.active { color: var(--accent-text); }
+/* Подсветка выбранной кнопки — отдельный слой под кнопками: при смене она
+   переезжает (--i — номер кнопки, --n — сколько их), а не перескакивает. */
+.seg { position: relative; }
+.seg-thumb {
+  position: absolute; top: 4px; bottom: 4px; left: 4px;
+  width: calc((100% - 8px - (var(--n, 2) - 1) * 4px) / var(--n, 2));
+  border-radius: 999px; background: var(--accent);
+  box-shadow: 0 4px 14px #c8ff3133;
+  transform: translateX(calc(var(--i, 0) * (100% + 4px)));
+  transition: transform .42s cubic-bezier(.3, 1.25, .45, 1);
+}
 
 /* Аналитика: карточки показателей, график выручки, статусы с долями. */
 .an-dates { margin: -4px 0 12px; font-size: 13px; }
@@ -762,8 +775,52 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m);
   padding: 14px;
 }
-.metric-label { color: var(--muted); font-size: 12px; }
-.metric-value { font-size: 22px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+.metric-label { display: flex; justify-content: space-between; gap: 6px; color: var(--muted); font-size: 12px; }
+.metric-value { display: block; font-size: 22px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+/* Карточка показателя — кнопка: по нажатию открывается список продаж. */
+.metric-link {
+  display: block; width: 100%; text-align: left;
+  font: inherit; color: var(--text); cursor: pointer;
+  transition: border-color .2s ease, transform .15s ease;
+}
+.metric-link:not([disabled]):hover { border-color: var(--accent); }
+.metric-link:not([disabled]):active { transform: scale(.98); }
+.metric-link[disabled] { cursor: default; }
+.metric-more { color: var(--muted); font-size: 15px; line-height: 1; }
+
+/* График продаж: слева шкала, столбик на каждый день, длинный период листается вбок. */
+.chart2 { display: flex; gap: 6px; }
+.chart-y { position: relative; flex: 0 0 22px; height: 140px; color: var(--muted); font-size: 11px; }
+.chart-y span { position: absolute; right: 0; transform: translateY(50%); line-height: 1; }
+.chart-scroll {
+  flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin; padding-top: 6px; margin-top: -6px;
+}
+.chart-plot {
+  position: relative; display: flex; gap: 3px;
+  min-width: 100%; width: calc(var(--cols) * 36px);
+}
+.chart-grid { position: absolute; left: 0; right: 0; top: 0; height: 140px; pointer-events: none; }
+.chart-grid span { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line); }
+.bar-col {
+  flex: 1 1 0; min-width: 33px;
+  display: flex; flex-direction: column;
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer;
+  border-radius: 8px;
+}
+.bar-plot { height: 140px; display: flex; align-items: flex-end; justify-content: center; }
+.bar-col .bar {
+  width: 72%; max-width: 30px; min-height: 3px;
+  background: var(--accent); border-radius: 5px 5px 0 0;
+  transform-origin: bottom;
+  transition: filter .2s ease, transform .2s ease;
+}
+.bar-col.empty { cursor: default; }
+.bar-col.empty .bar { height: 2px; min-height: 2px; background: var(--surface-3); }
+.bar-col:not(.empty):hover .bar, .bar-col:not(.empty):focus-visible .bar { filter: brightness(1.12); transform: scaleX(1.08); }
+.bar-col:not(.empty):hover .bar-x { color: var(--text); }
+.bar-x { height: 22px; line-height: 24px; font-size: 10px; color: var(--muted); text-align: center; white-space: nowrap; }
 .card-title { font-weight: 700; font-size: 15px; margin-bottom: 12px; }
 .chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; }
 .chart .bar { flex: 1; min-width: 2px; background: var(--accent); border-radius: 3px 3px 0 0; }
@@ -805,6 +862,15 @@ h2 .test-tag { font-size: 12px; }
 .hist-head { display: flex; justify-content: space-between; gap: 10px; font-weight: 600; }
 .hist-detail { margin-top: 3px; overflow-wrap: anywhere; }
 .hist-row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+/* Строка заказа в карточке промокода — ссылка на сам заказ. */
+.hist-link {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--line);
+  font: inherit; color: var(--text); cursor: pointer;
+}
+.hist-link .hist-head, .hist-link > .meta { display: flex; }
+.hist-link .hist-code { color: var(--promo-text); }
+.hist-link:active { opacity: .7; }
 .pform .field { margin-top: 16px; }
 .pform > .field:first-child { margin-top: 0; }
 /* В форме поля обычного размера: крупный кегль .field input — для UDID. 16px — чтобы iPhone не увеличивал страницу. */
@@ -826,7 +892,30 @@ h2 .test-tag { font-size: 12px; }
 .input-row { display: flex; gap: 8px; align-items: stretch; }
 .input-row input { flex: 1; }
 .input-row .btn { width: auto; flex: 0 0 auto; }
-.input-row .pf-dice { width: 50px; padding: 0; font-size: 20px; }
+.input-row .pf-regen { width: 50px; padding: 0; color: var(--text); }
+.input-row .pf-regen svg { transition: transform .45s cubic-bezier(.3, 1.2, .4, 1); }
+.input-row .pf-regen:active svg { transform: rotate(180deg); }
+
+/* Группы формы промокода: срок и лимиты — подписи слева над полями, без пустот. */
+.pf-group {
+  margin-top: 16px; padding: 14px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-m);
+}
+.pf-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.pf-group-title { font-size: 14px; font-weight: 600; }
+.pf-group-hint { font-size: 12px; color: var(--muted); text-align: right; }
+/* Быстрый срок переносится на вторую строку, а не уезжает за край: все варианты на виду. */
+.pf-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.pf-chips .chip { cursor: pointer; font: inherit; font-size: 13px; padding: 7px 12px; }
+.pf-mini { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pf-mini-label { font-size: 12px; color: var(--muted); }
+.pf-mini input {
+  display: block; width: 100%; min-width: 0; min-height: 48px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s);
+  color: var(--text); font: inherit; font-size: 16px; padding: 11px 12px; outline: none;
+}
+.pf-mini input:focus { border-color: var(--accent); }
+.pf-mini input[type="date"] { font-size: 15px; padding: 11px 10px; }
 .input-suffix { position: relative; }
 .pform .input-suffix input { padding-right: 40px; }
 .input-suffix span {
@@ -1365,7 +1454,7 @@ a.brand { text-decoration: none; color: inherit; }
 
 /* Аналитика: столбики вырастают слева направо, полоски статусов — тоже. */
 @keyframes bar-grow { from { transform: scaleY(0); } }
-.chart .bar {
+.chart .bar, .bar-col .bar {
   transform-origin: bottom;
   animation: bar-grow .65s cubic-bezier(.2, .8, .2, 1) both;
   animation-delay: calc(var(--i, 0) * 14ms);

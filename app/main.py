@@ -108,6 +108,19 @@ async def keep_profile(bot: Bot, cfg: Config) -> None:
         await asyncio.sleep(PROFILE_CHECK)
 
 
+EXPIRE_CHECK = 600  # секунд: так часто ищем неоплаченные заказы, которым пора напомнить или отмениться
+
+
+async def keep_expiring(service: OrderService) -> None:
+    """Автоотмена неоплаченных заказов (ORDER_TTL_DAYS) — проверка раз в десять минут."""
+    while True:
+        try:
+            await service.expire_unpaid()
+        except Exception:
+            log.exception("Автоотмена заказов не прошла — попробуем на следующей проверке")
+        await asyncio.sleep(EXPIRE_CHECK)
+
+
 def mask_proxy(url: str) -> str:
     """Прячет пароль прокси, чтобы он не утёк в логи."""
     if "@" not in url:
@@ -234,6 +247,7 @@ async def run() -> None:
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     )
     profile = asyncio.create_task(keep_profile(bot, cfg))
+    expiring = asyncio.create_task(keep_expiring(service))
     waiter = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait({polling, waiter}, return_when=asyncio.FIRST_COMPLETED)
@@ -241,6 +255,7 @@ async def run() -> None:
         log.info("Останавливаемся...")
         waiter.cancel()
         profile.cancel()
+        expiring.cancel()
         if not polling.done():
             await dp.stop_polling()
             await asyncio.gather(polling, return_exceptions=True)
