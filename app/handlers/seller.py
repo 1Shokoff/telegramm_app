@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from .. import analytics, const, db, keyboards, texts
+from .. import analytics, const, db, keyboards, promocodes, texts
 from ..config import Config
 from ..service import OrderService, ServiceError
 
@@ -79,6 +80,44 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
         await message.answer("%s\n\n%s" % (texts.e(str(exc)), texts.STATS_PERIODS_HINT))
         return
     await message.answer(texts.analytics_text(await analytics.report(period)))
+
+
+# Кнопок в списке /promos — не больше этого, свежие сверху.
+PROMO_LIST_LIMIT = 30
+
+
+async def _promo_list(cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
+    data = await promocodes.listing(cfg)
+    items = data["promocodes"][:PROMO_LIST_LIMIT]
+    text = texts.promocode_list(data, promocodes.STATUSES)
+    if data["total"] > len(items):
+        text += "\n\nПоказаны %d новых из %d — остальные в Mini App." % (len(items), data["total"])
+    return text, keyboards.promocodes_kb(items)
+
+
+async def _promo_card(cfg: Config, promo: dict, confirm_delete: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    p = await promocodes.details(promo, cfg)
+    return texts.promocode_card(p), keyboards.promocode_kb(p, confirm_delete)
+
+
+@router.message(Command("promos"))
+async def cmd_promos(message: Message, cfg: Config) -> None:
+    text, kb = await _promo_list(cfg)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.message(Command("promo"))
+async def cmd_promo(message: Message, command: CommandObject, cfg: Config) -> None:
+    raw = (command.args or "").strip()
+    if not raw:
+        await message.answer("Использование: /promo КОД — карточка промокода. Все промокоды — /promos")
+        return
+    promo = await promocodes.find(raw)
+    if not promo:
+        await message.answer("Промокода «%s» нет. Все промокоды — /promos" % texts.e(raw))
+        return
+    text, kb = await _promo_card(cfg, promo)
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(Command("find"))
@@ -169,8 +208,10 @@ async def cmd_sellerhelp(message: Message) -> None:
         "/reply NP-0001 текст — ответить покупателю\n"
         "/log NP-0001 — история заказа\n"
         "/note NP-0001 текст — заметка к заказу\n"
-        "/stats — продажи и выручка: /stats 7d, /stats month, /stats 01.10-20.10\n\n"
-        "Действия по заказу — кнопками под карточкой."
+        "/stats — продажи и выручка: /stats 7d, /stats month, /stats 01.10-20.10\n"
+        "/promos — промокоды, /promo КОД — карточка промокода\n\n"
+        "Действия по заказу — кнопками под карточкой. "
+        "Создать промокод или поменять его условия — в Mini App."
     )
 
 
@@ -281,6 +322,52 @@ async def cb_bell(call: CallbackQuery) -> None:
     elif nxt is False:
         mode = const.ORDER_NOTIFY_OFF
     await call.answer("%s: %s" % (order["code"], const.ORDER_NOTIFY_TITLES[mode]), show_alert=True)
+
+
+async def _edit(call: CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
+    """Правим сообщение на месте; старое (больше 48 часов) Telegram не даст — шлём новое."""
+    try:
+        await call.message.edit_text(text, reply_markup=kb)
+    except TelegramBadRequest as exc:
+        # «Обновить» без изменений: карточка и так актуальна, второе сообщение не нужно.
+        if "not modified" in str(exc):
+            return
+        await call.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("pc:"))
+async def cb_promo(call: CallbackQuery, cfg: Config) -> None:
+    parsed = keyboards.parse_promo_cb(call.data)
+    if not parsed:
+        await call.answer()
+        return
+    action, promo_id = parsed
+    if action == "list":
+        text, kb = await _promo_list(cfg)
+        await _edit(call, text, kb)
+        await call.answer()
+        return
+
+    actor = _actor(call)
+    try:
+        if action in ("on", "off"):
+            promo = await promocodes.set_enabled(promo_id, action == "on", actor)
+            note = "Промокод включён" if action == "on" else "Промокод выключен"
+        elif action == "delyes":
+            old = await promocodes.remove(promo_id, actor)
+            text, kb = await _promo_list(cfg)
+            await _edit(call, "🗑 Промокод <code>%s</code> удалён.\n\n%s" % (texts.e(old["code"]), text), kb)
+            await call.answer("Промокод удалён")
+            return
+        else:
+            promo = await promocodes.get(promo_id)
+            note = "Удалить промокод насовсем?" if action == "del" else ""
+    except promocodes.PromoError as exc:
+        await call.answer(str(exc), show_alert=True)
+        return
+    text, kb = await _promo_card(cfg, promo, confirm_delete=action == "del")
+    await _edit(call, text, kb)
+    await call.answer(note)
 
 
 @router.callback_query(F.data.startswith("o:chat:"))

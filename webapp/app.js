@@ -25,8 +25,10 @@ const state = {
   seller: {
     status: 'open', q: '', orders: [], counts: {}, current: null,
     total: 0, titles: {}, prefs: null, panel: false,
-    // mode — «Заказы» или «Аналитика»; analytics — последний отчёт, period — выбранный период.
+    // mode — «Заказы», «Аналитика» или «Промокоды»; analytics — последний отчёт, period — выбранный период.
     mode: 'orders', analytics: null, period: null,
+    // Промокоды: фильтр по статусу, список, открытая карточка и форма создания или правки.
+    promo: { status: 'all', list: [], counts: {}, total: 0, current: null, form: null, confirmDelete: false },
   },
   supplier: { orders: [], current: null },
   chat: { orderId: null, title: '', from: 'order', messages: [], timer: null },
@@ -1239,7 +1241,7 @@ function sellerModeSwitch() {
     '<button class="seg-btn' + (mode === key ? ' active' : '') + '" data-action="seller-mode:' + key + '" ' +
       'aria-pressed="' + (mode === key) + '">' + label + '</button>'
   );
-  return '<div class="seg">' + btn('orders', 'Заказы') + btn('analytics', 'Аналитика') + '</div>';
+  return '<div class="seg">' + btn('orders', 'Заказы') + btn('analytics', 'Аналитика') + btn('promos', 'Промокоды') + '</div>';
 }
 
 function pointLabel(label, unit) {
@@ -1330,8 +1332,210 @@ function viewAnalytics() {
   );
 }
 
+/* ------------------------------------------------------------ промокоды */
+
+const PROMO_FILTERS = [
+  ['all', 'Все'], ['active', 'Активные'], ['scheduled', 'Ещё не начались'],
+  ['expired', 'Истекли'], ['exhausted', 'Исчерпаны'], ['disabled', 'Выключены'],
+];
+
+async function loadPromos() {
+  const p = state.seller.promo;
+  const data = await api('/api/seller/promocodes?status=' + encodeURIComponent(p.status));
+  p.list = data.promocodes;
+  p.counts = data.counts || {};
+  p.total = data.total || 0;
+}
+
+async function openPromo(id) {
+  const data = await api('/api/seller/promocode?id=' + encodeURIComponent(id));
+  const p = state.seller.promo;
+  p.current = data.promocode;
+  p.form = null;
+  p.confirmDelete = false;
+}
+
+function promoLine(p) {
+  return (
+    '<button class="order-line" data-action="promo-open:' + p.id + '">' +
+      '<span class="status-dot promo-' + esc(p.status) + '"></span>' +
+      '<span class="grow"><span class="code promo-code">' + esc(p.code) + '</span><br>' +
+      '<span class="meta">' + esc(p.valueText) + ' · ' + esc(p.statusTitle) + ' · применён ' + esc(p.usesText) + '</span></span>' +
+      '<span class="meta">›</span>' +
+    '</button>'
+  );
+}
+
+function viewPromos() {
+  const p = state.seller.promo;
+  if (p.form) return viewPromoForm(p.form);
+  if (p.current) return viewPromo(p.current);
+  const chips = PROMO_FILTERS.map(([key, label]) => {
+    const n = key === 'all' ? p.total : (p.counts[key] || 0);
+    return '<button class="chip' + (p.status === key ? ' active' : '') + '" data-action="promo-filter:' + key + '" ' +
+      'aria-pressed="' + (p.status === key) + '">' + esc(label) + ' · ' + n + '</button>';
+  }).join('');
+  let list = p.list.map(promoLine).join('');
+  if (!list) {
+    list = '<div class="notice">' + (p.total
+      ? 'В этом фильтре промокодов нет.'
+      : 'Промокодов пока нет. Создайте первый — код можно сгенерировать.') + '</div>';
+  }
+  return (
+    '<h1>Продавец</h1>' + sellerModeSwitch() +
+    '<button class="btn btn-primary mb" data-action="promo-new">＋ Новый промокод</button>' +
+    '<div class="filters">' + chips + '</div>' + list +
+    '<div class="cta-note">Покупатели промокодов не видят — публикуйте их сами, где нужно. ' +
+      'Ввести промокод в заказе можно будет на следующем этапе.</div>'
+  );
+}
+
+function promoRow(label, value) {
+  return '<div class="row"><span class="label">' + esc(label) + '</span><span class="value">' + value + '</span></div>';
+}
+
+function viewPromo(p) {
+  // Цена с промокодом: сейчас, а во время акции — и после неё.
+  const prices = p.prices.map((row) => promoRow(row.title, row.final
+    ? '<span class="old-price">' + esc(row.priceText) + '</span> <span class="new-price">' + esc(row.finalText) + '</span>'
+    : '<span class="danger-text">не сработает: скидка не меньше цены</span>')).join('');
+  const history = p.history.map((h) => (
+    '<div class="hist-row">' +
+      '<div class="hist-head"><span>' + esc(h.title) + '</span><span class="meta">' + esc(dateOf(h.at)) + '</span></div>' +
+      (h.detail ? '<div class="hist-detail">' + esc(h.detail) + '</div>' : '') +
+      '<div class="meta">' + esc(h.actor) + '</div>' +
+    '</div>'
+  )).join('');
+  return (
+    '<button class="backlink" data-action="promo-back">← Все промокоды</button>' +
+    '<div class="section-head"><h2>Промокод</h2><span class="badge">' + esc(p.statusTitle) + '</span></div>' +
+    '<div class="card">' +
+      '<div class="row"><span class="label">Код</span>' +
+        '<button type="button" class="value mono copyable" data-action="copy:promo-code" aria-label="Скопировать код">' +
+          esc(p.code) + ' ' + copyIcon() + '</button></div>' +
+      promoRow('Скидка', esc(p.valueText)) + prices +
+      promoRow('Действует', esc(p.periodText)) +
+      promoRow('Применён', esc(p.usesText)) +
+      promoRow('На одного покупателя', esc(p.perUserText)) +
+      (p.note ? promoRow('Заметка', esc(p.note)) : '') +
+      promoRow('Создал', esc(p.createdBy) + ', ' + esc(dateOf(p.createdAt))) +
+    '</div>' +
+    '<button class="btn btn-secondary" data-action="promo-edit">✏️ Изменить условия</button>' +
+    '<button class="btn btn-secondary mt" data-action="promo-toggle">' + (p.enabled ? '⏸ Выключить' : '▶️ Включить') + '</button>' +
+    deletePromoBlock(p) +
+    (history ? '<div class="card mt"><div class="card-title">История</div>' + history + '</div>' : '')
+  );
+}
+
+/* Удалить можно только промокод, который ни разу не применяли. */
+function deletePromoBlock(p) {
+  if (!p.canDelete) {
+    return '<div class="cta-note">Промокод уже применяли — удалить нельзя, только выключить.</div>';
+  }
+  if (!state.seller.promo.confirmDelete) {
+    return '<button class="btn btn-ghost btn-sm mt danger-text" data-action="promo-delete">🗑 Удалить промокод</button>';
+  }
+  return (
+    '<div class="card confirm-box">' +
+      '<div class="confirm-title">Удалить промокод ' + esc(p.code) + '?</div>' +
+      '<div class="confirm-text">Его ещё ни разу не применяли. Если код уже где-то опубликован, ' +
+        'ввести его будет нельзя. Вернуть промокод не получится — только создать заново.</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn btn-secondary" data-action="promo-delete-no">Оставить</button>' +
+        '<button class="btn btn-danger" data-action="promo-delete-yes">Удалить</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+function promoField(id, label, control, hint) {
+  return (
+    '<div class="field"><label' + (id ? ' for="' + id + '"' : '') + '>' + esc(label) + '</label>' + control +
+      (hint ? '<div class="field-hint">' + esc(hint) + '</div>' : '') + '</div>'
+  );
+}
+
+function numberInput(id, value, placeholder) {
+  return '<input id="' + id + '" type="number" inputmode="numeric" min="1" step="1" ' +
+    'value="' + esc(value) + '" placeholder="' + esc(placeholder) + '">';
+}
+
+/* Форма создания и правки. Значения живут в state.seller.promo.form:
+   перед перерисовкой (смена типа скидки, ошибка) их снимает readPromoForm. */
+function viewPromoForm(f) {
+  const isNew = !f.id;
+  const kindBtn = (key, label) => (
+    '<button type="button" class="seg-btn' + (f.kind === key ? ' active' : '') + '" data-action="pf-kind:' + key + '" ' +
+      'aria-pressed="' + (f.kind === key) + '">' + label + '</button>'
+  );
+  const code = isNew
+    ? promoField('pfCode', 'Код',
+        '<div class="input-row"><input id="pfCode" class="pf-code" value="' + esc(f.code) + '" maxlength="32" ' +
+          'autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false">' +
+          // Кнопка — одним значком: на узком экране случайный код иначе не влезает в поле.
+          '<button type="button" class="btn btn-secondary btn-sm pf-dice" data-action="pf-generate" ' +
+            'aria-label="Сгенерировать другой код" title="Сгенерировать другой код">🎲</button></div>',
+        'Латиница, цифры и дефис; 🎲 — другой случайный код. После создания код не меняется.')
+    : promoField('', 'Код', '<div class="pf-code pf-fixed">' + esc(f.code) + '</div>', 'Код после создания не меняется.');
+  return (
+    '<button class="backlink" data-action="promo-form-back">← ' + (isNew ? 'Все промокоды' : 'К промокоду') + '</button>' +
+    '<h2>' + (isNew ? 'Новый промокод' : 'Условия промокода') + '</h2>' +
+    '<div class="card pform mt">' +
+      code +
+      promoField('pfValue', 'Скидка',
+        '<div class="seg">' + kindBtn('percent', 'В процентах') + kindBtn('rub', 'В рублях') + '</div>' +
+        '<div class="input-suffix">' + numberInput('pfValue', f.value, f.kind === 'rub' ? '500' : '20') +
+          '<span>' + (f.kind === 'rub' ? '₽' : '%') + '</span></div>',
+        f.kind === 'rub'
+          ? 'Меньше цены: бесплатных промокодов нет.'
+          : 'От 1 до 99%. Во время акции — от цены по акции.') +
+      '<div class="pf-pair">' +
+        promoField('pfStarts', 'Действует с', '<input id="pfStarts" type="date" value="' + esc(f.startsOn) + '">') +
+        promoField('pfEnds', 'по', '<input id="pfEnds" type="date" value="' + esc(f.endsOn) + '">') +
+      '</div>' +
+      '<div class="field-hint">Даты по Москве, включительно. Пусто — без ограничения.</div>' +
+      '<div class="pf-pair">' +
+        promoField('pfMax', 'Всего применений', numberInput('pfMax', f.maxUses, 'без лимита')) +
+        promoField('pfPer', 'На покупателя', numberInput('pfPer', f.perUser, 'без лимита')) +
+      '</div>' +
+      promoField('pfNote', 'Заметка для продавцов',
+        '<textarea id="pfNote" maxlength="300" placeholder="Где опубликован, для кого">' + esc(f.note) + '</textarea>',
+        'Покупатель её не видит.') +
+      '<label class="switch-row"><span class="switch-text"><span class="switch-title">Включён</span>' +
+        '<span class="switch-hint">Выключенный промокод не сработает, даже если срок идёт.</span></span>' +
+        '<input type="checkbox" class="switch" id="pfEnabled"' + (f.enabled ? ' checked' : '') + '></label>' +
+    '</div>' +
+    (f.error ? '<div class="field-error pf-error">' + esc(f.error) + '</div>' : '') +
+    '<button class="btn btn-primary mt" data-action="pf-save">' + (isNew ? 'Создать промокод' : 'Сохранить') + '</button>' +
+    '<button class="btn btn-ghost" data-action="promo-form-back">Отмена</button>'
+  );
+}
+
+function readPromoForm() {
+  const f = state.seller.promo.form;
+  if (!f) return;
+  const fields = { pfCode: 'code', pfValue: 'value', pfStarts: 'startsOn', pfEnds: 'endsOn', pfMax: 'maxUses', pfPer: 'perUser', pfNote: 'note' };
+  Object.keys(fields).forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) f[fields[id]] = el.value;
+  });
+  const enabled = document.getElementById('pfEnabled');
+  if (enabled) f.enabled = enabled.checked;
+}
+
+function promoForm(p) {
+  const text = (v) => (v == null ? '' : String(v));
+  return {
+    id: p.id, code: p.code, kind: p.kind, value: text(p.value),
+    startsOn: text(p.startsOn), endsOn: text(p.endsOn),
+    maxUses: text(p.maxUses), perUser: text(p.perUser),
+    enabled: p.enabled, note: text(p.note), error: '',
+  };
+}
+
 function viewSeller() {
   const s = state.seller;
+  if (s.mode === 'promos') return viewPromos();
   if (s.current) return viewSellerOrder(s.current);
   if (s.mode === 'analytics') return viewAnalytics();
 
@@ -1672,6 +1876,10 @@ function screenKey() {
     if (state.newOrder) return 'order:new:' + (state.checkoutApp || 'catalog');
     return 'order:' + (o ? o.id + ':' + o.status : 'none');
   }
+  if (state.view === 'seller' && state.seller.mode === 'promos') {
+    const p = state.seller.promo;
+    return 'seller:promos:' + (p.form ? 'form:' + (p.form.id || 'new') : (p.current ? p.current.id : 'list'));
+  }
   if (state.view === 'seller') return 'seller:' + (state.seller.current ? state.seller.current.id : 'list');
   if (state.view === 'supplier') return 'supplier:' + (state.supplier.current ? state.supplier.current.id : 'list');
   return state.view;
@@ -1747,9 +1955,16 @@ function updateBackButton() {
   // уведомления и карточка заказа у продавца — вложенные экраны.
   const nested = TABS.indexOf(state.view) === -1
     || (state.view === 'seller' && !!state.seller.current)
+    || (state.view === 'seller' && promoNested())
     || (state.view === 'supplier' && !!state.supplier.current);
   if (nested) tg.BackButton.show();
   else tg.BackButton.hide();
+}
+
+/* Карточка промокода и форма — вложенные экраны раздела «Промокоды». */
+function promoNested() {
+  const p = state.seller.promo;
+  return state.seller.mode === 'promos' && !!(p.current || p.form);
 }
 
 /* Ряды фильтров прокручиваются вбок. На телефоне это делает палец,
@@ -2007,6 +2222,15 @@ function bindInputs() {
     });
   });
 
+  // Код промокода — заглавными и без пробелов, как его сохранит сервер.
+  const promoCode = document.getElementById('pfCode');
+  if (promoCode) {
+    promoCode.addEventListener('input', () => {
+      const clean = promoCode.value.toUpperCase().replace(/\s+/g, '');
+      if (promoCode.value !== clean) promoCode.value = clean;
+    });
+  }
+
   const search = document.getElementById('sellerSearch');
   if (search) {
     let timer = null;
@@ -2077,6 +2301,9 @@ function copyValue(key) {
   } else if (key === 'seller-udid') {
     const current = state.seller.current;
     text = current && current.udid;
+  } else if (key === 'promo-code') {
+    const current = state.seller.promo.current;
+    text = current && current.code;
   } else {
     const row = rows.find((r) => r.key === key);
     text = row && row.value;
@@ -2488,6 +2715,103 @@ const actions = {
     prefs.hideTest = !prefs.hideTest;
     sellerPrefsChanged();
   },
+
+  // Новый промокод: форма сразу со случайным кодом — его можно заменить своим.
+  'promo-new': () => guard(async () => {
+    const data = await api('/api/seller/promocode/new');
+    state.seller.promo.form = {
+      id: null, code: data.code, kind: 'percent', value: '', startsOn: '', endsOn: '',
+      maxUses: '', perUser: '1', enabled: true, note: '', error: '',
+    };
+    render();
+  }),
+
+  'pf-generate': () => guard(async () => {
+    const data = await api('/api/seller/promocode/new');
+    const f = state.seller.promo.form;
+    if (f) f.code = data.code;
+    const input = document.getElementById('pfCode');
+    if (input) input.value = data.code;
+  }),
+
+  'pf-save': () => guard(async () => {
+    readPromoForm();
+    const p = state.seller.promo;
+    const f = p.form;
+    if (!f) return;
+    const body = {
+      action: f.id ? 'update' : 'create', kind: f.kind, value: f.value,
+      startsOn: f.startsOn, endsOn: f.endsOn, maxUses: f.maxUses, perUser: f.perUser,
+      enabled: f.enabled, note: f.note,
+    };
+    if (f.id) body.id = f.id;
+    else body.code = f.code;
+    let data;
+    try {
+      data = await api('/api/seller/promocode', { method: 'POST', body });
+    } catch (err) {
+      // Ошибку показываем над кнопкой: её нужно прочитать и поправить поле.
+      f.error = err.message;
+      haptic('error');
+      render();
+      const box = document.querySelector('.pf-error');
+      if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    p.current = data.promocode;
+    p.form = null;
+    await loadPromos();
+    toast(f.id ? 'Промокод сохранён' : 'Промокод ' + data.promocode.code + ' создан');
+    render();
+  }),
+
+  'promo-edit': () => {
+    const current = state.seller.promo.current;
+    if (!current) return;
+    state.seller.promo.form = promoForm(current);
+    state.seller.promo.confirmDelete = false;
+    render();
+  },
+
+  'promo-form-back': () => { state.seller.promo.form = null; render(); },
+
+  'promo-back': () => {
+    state.seller.promo.current = null;
+    state.seller.promo.confirmDelete = false;
+    render();
+  },
+
+  'promo-toggle': () => guard(async () => {
+    const current = state.seller.promo.current;
+    if (!current) return;
+    const data = await api('/api/seller/promocode', {
+      method: 'POST', body: { action: current.enabled ? 'disable' : 'enable', id: current.id },
+    });
+    state.seller.promo.current = data.promocode;
+    await loadPromos();
+    toast(data.promocode.enabled ? 'Промокод включён' : 'Промокод выключен');
+    render();
+  }),
+
+  'promo-delete': () => {
+    state.seller.promo.confirmDelete = true;
+    render();
+    const box = document.querySelector('.confirm-box');
+    if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+
+  'promo-delete-no': () => { state.seller.promo.confirmDelete = false; render(); },
+
+  'promo-delete-yes': () => guard(async () => {
+    const p = state.seller.promo;
+    if (!p.current) return;
+    const data = await api('/api/seller/promocode', { method: 'POST', body: { action: 'delete', id: p.current.id } });
+    p.current = null;
+    p.confirmDelete = false;
+    await loadPromos();
+    toast('Промокод ' + data.code + ' удалён');
+    render();
+  }),
 };
 
 function handleAction(raw) {
@@ -2497,11 +2821,14 @@ function handleAction(raw) {
   if (kind === 'tab') {
     state.view = value;
     state.seller.current = null;
+    state.seller.promo.current = null;
+    state.seller.promo.form = null;
     state.supplier.current = null;
     haptic('light');
     if (value === 'seller') {
       guard(async () => {
         if (state.seller.mode === 'analytics') await loadAnalytics();
+        else if (state.seller.mode === 'promos') await loadPromos();
         else await loadSellerOrders();
         render();
       });
@@ -2561,7 +2888,23 @@ function handleAction(raw) {
   if (kind === 'seller-mode') {
     state.seller.mode = value;
     if (value === 'analytics') guard(async () => { await loadAnalytics(); render(); });
+    else if (value === 'promos') guard(async () => { await loadPromos(); render(); });
     else guard(async () => { await loadSellerOrders(); render(); });
+    return;
+  }
+  if (kind === 'promo-filter') {
+    state.seller.promo.status = value;
+    guard(async () => { await loadPromos(); render(); });
+    return;
+  }
+  if (kind === 'promo-open') {
+    guard(async () => { await openPromo(value); render(); });
+    return;
+  }
+  if (kind === 'pf-kind') {
+    readPromoForm();
+    if (state.seller.promo.form) state.seller.promo.form.kind = value;
+    render();
     return;
   }
   if (kind === 'an-period') {
@@ -2658,6 +3001,10 @@ async function boot() {
     if (tg.BackButton) {
       tg.BackButton.onClick(() => {
         if (state.view === 'doc') { handleAction('doc-back'); return; }
+        if (state.view === 'seller' && promoNested()) {
+          handleAction(state.seller.promo.form ? 'promo-form-back' : 'promo-back');
+          return;
+        }
         if (state.seller.current) state.seller.current = null;
         else if (state.supplier.current) state.supplier.current = null;
         else state.view = 'home';

@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import plistlib
+import re
 import sys
 import tempfile
 import time
@@ -63,7 +64,7 @@ from aiogram.methods import SendDocument, SendMessage  # noqa: E402
 from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from app import analytics, auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, texts, udid as udid_mod  # noqa: E402
+from app import analytics, auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, promocodes, texts, udid as udid_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
 from app.config import MSK, load_config, today_msk  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
@@ -1042,6 +1043,12 @@ async def test_migration(tmp: str) -> None:
         );
         INSERT INTO orders (code, user_id, status, price_rub, payment_mode, created_at, updated_at)
         VALUES ('NP-0001', 1, 'done', 3000, 'manual', '2026-10-01T00:00:00+00:00', '2026-10-01T00:00:00+00:00');
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+            actor TEXT NOT NULL, type TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL
+        );
+        INSERT INTO events (order_id, actor, type, detail, created_at)
+        VALUES (1, 'system', 'created', NULL, '2026-10-01T00:00:00+00:00');
         """
     )
     old.commit()
@@ -1053,6 +1060,15 @@ async def test_migration(tmp: str) -> None:
     check("и колонка is_test", "is_test" in columns)
     order = await db.get_order(1)
     check("старый выполненный заказ не считается закрытым", order and order["closed_at"] is None)
+    events = {row["name"] for row in await db._fetchall("PRAGMA table_info(events)")}
+    check("в журнал событий добавлена колонка promo_id", "promo_id" in events)
+    check("старая история заказа на месте", len(await db.list_events(1)) == 1)
+    promo = await db.create_promocode(
+        "OLD-BASE", {"kind": "percent", "value": 10, "starts_on": None, "ends_on": None, "max_uses": None,
+                     "per_user": 1, "enabled": 1, "note": None}, "seller:1", "скидка 10%")
+    check("в старой базе промокоды создаются вместе с историей", len(await db.list_promo_events(promo["id"])) == 1)
+    await db.delete_promocode(promo["id"], "seller:1", "OLD-BASE")
+    check("и история уходит вместе с промокодом", await db.list_promo_events(promo["id"]) == [])
     await db.close()
     await db.init(path)
     check("повторный запуск миграции не падает", True)
@@ -1446,6 +1462,178 @@ def bump(path: pathlib.Path, seconds: int) -> None:
     os.utime(path, (moment, moment))
 
 
+async def test_promocodes(cfg) -> None:
+    """Промокоды: правила, расчёт цены вместе с акцией, история, удаление и права в API."""
+    print("\nПромокоды")
+    today = today_msk()
+    sale = replace(cfg, price_rub=3000, promo_price_rub=1500, promo_until=None, promo_label="-50% в честь открытия")
+    plain = replace(cfg, price_rub=3000, promo_price_rub=0)
+    actor = "seller:%d" % SELLER
+    await db.upsert_user(SELLER, "boss", "Продавец")
+
+    codes = {promocodes.generate() for _ in range(50)}
+    check("случайный код вида IAPKI-XXXXXX-XXXXXX",
+          all(re_full(r"IAPKI-[A-Z2-9]{6}-[A-Z2-9]{6}", c) for c in codes), str(sorted(codes)[:3]))
+    check("в случайном коде нет 0, O, 1, I, L", not any(set(c[6:]) & set("0O1IL") for c in codes))
+    check("случайные коды не повторяются", len(codes) == 50)
+    check("поиск: пробелы, регистр, тире и русские двойники",
+          promocodes.normalize(" iapki–7кqт2х-c9s9wl ") == "IAPKI-7KQT2X-C9S9WL",
+          promocodes.normalize(" iapki–7кqт2х-c9s9wl "))
+
+    async def refused(coro, needle: str) -> bool:
+        try:
+            await coro
+        except promocodes.PromoError as exc:
+            return needle in str(exc)
+        return False
+
+    base = {"code": "OSEN20", "kind": "percent", "value": 20}
+    check("100% не бывает", await refused(promocodes.create(dict(base, value=100), plain, actor), "от 1 до 99"))
+    check("0% тоже", await refused(promocodes.create(dict(base, value=0), plain, actor), "от 1 до 99"))
+    check("скидка в рублях меньше цены",
+          await refused(promocodes.create(dict(base, kind="rub", value=3000), plain, actor), "меньше цены"))
+    check("во время акции — меньше цены по акции",
+          await refused(promocodes.create(dict(base, kind="rub", value=1500), sale, actor), "1 500 ₽"))
+    check("тип скидки обязателен", await refused(promocodes.create(dict(base, kind="gift"), plain, actor), "в процентах или в рублях"))
+    check("код кириллицей не принимаем", await refused(promocodes.create(dict(base, code="ОСЕНЬ"), plain, actor), "латиницей"))
+    check("короткий код — нет", await refused(promocodes.create(dict(base, code="AB"), plain, actor), "от 4 до 32"))
+    check("пустой код — подсказка про генератор", await refused(promocodes.create(dict(base, code=""), plain, actor), "Сгенерировать"))
+    check("окончание раньше начала",
+          await refused(promocodes.create(dict(base, startsOn="2026-12-10", endsOn="2026-12-01"), plain, actor), "раньше начала"))
+    check("прошедший срок не задать",
+          await refused(promocodes.create(dict(base, endsOn=(today - timedelta(days=1)).isoformat()), plain, actor), "уже прошла"))
+    check("на покупателя не больше, чем всего",
+          await refused(promocodes.create(dict(base, maxUses=2, perUser=3), plain, actor), "чем всего"))
+    check("лимит — от 1", await refused(promocodes.create(dict(base, maxUses=0), plain, actor), "от 1"))
+
+    promo = await promocodes.create(
+        dict(base, code=" osen–20 ", endsOn=(today + timedelta(days=30)).isoformat(), maxUses="100", note="Пост в канале"),
+        sale, actor,
+    )
+    check("код сохранён заглавными, с дефисом", promo["code"] == "OSEN-20", promo["code"])
+    check("на покупателя по умолчанию — 1 раз", promo["per_user"] == 1)
+    check("новый промокод включён и ни разу не применён", promo["enabled"] == 1 and promo["used"] == 0)
+    check("тот же код второй раз не создать",
+          await refused(promocodes.create(dict(base, code="osen-20"), plain, actor), "уже есть"))
+
+    card = await promocodes.details(promo, sale)
+    rows = {r["title"]: r["finalText"] for r in card["prices"]}
+    check("акция и промокод складываются: (3000 − 50%) − 20% = 1 200 ₽", rows.get("Сейчас, по акции") == "1 200 ₽", str(rows))
+    check("после акции — от обычной цены", rows.get("После акции") == "2 400 ₽", str(rows))
+    check("без акции — одна строка", [r["finalText"] for r in (await promocodes.details(promo, plain))["prices"]] == ["2 400 ₽"])
+    check("скидка в рублях", promocodes.final_price(1500, {"kind": "rub", "value": 500}) == 1000)
+    check("проценты округляются до рубля", promocodes.final_price(1499, {"kind": "percent", "value": 15}) == 1274)
+    check("скидка не меньше цены — промокод не сработает", promocodes.final_price(1000, {"kind": "rub", "value": 1000}) is None)
+    check("карточка: активен, автор — юзернейм продавца",
+          card["status"] == "active" and card["statusTitle"] == "Активен" and card["createdBy"] == "@boss", str(card)[:200])
+    check("карточка: применён 0 из 100, 1 раз на покупателя",
+          card["usesText"] == "0 из 100" and card["perUserText"] == "1 раз", card["usesText"] + " / " + card["perUserText"])
+    check("в истории — создание с условиями",
+          card["history"] and card["history"][0]["title"] == "Создан" and "20%" in card["history"][0]["detail"], str(card["history"]))
+
+    check("код после создания не меняется",
+          await refused(promocodes.update(promo["id"], {"code": "OTHER"}, plain, actor), "не меняется"))
+    edited = await promocodes.update(promo["id"], {"value": 25, "perUser": "", "note": "Сторис"}, plain, actor)
+    check("правка сохранилась", edited["value"] == 25 and edited["per_user"] is None and edited["note"] == "Сторис")
+    check("остальные поля не тронуты", edited["max_uses"] == 100 and edited["kind"] == "percent")
+    history = (await promocodes.details(edited, plain))["history"]
+    check("в истории — было → стало",
+          history[0]["title"] == "Изменён" and "20% → 25%" in history[0]["detail"]
+          and "без ограничений" in history[0]["detail"] and "заметка" in history[0]["detail"], str(history[0]))
+    same = await promocodes.update(promo["id"], {"value": 25}, plain, actor)
+    check("правка без изменений историю не засоряет",
+          len((await promocodes.details(same, plain))["history"]) == len(history))
+
+    off = await promocodes.set_enabled(promo["id"], False, actor)
+    check("выключен — статус «Выключен»", promocodes.status(off) == "disabled")
+    on = await promocodes.set_enabled(promo["id"], True, actor)
+    check("включён обратно", promocodes.status(on) == "active")
+
+    def row(**over):
+        data = {"enabled": 1, "starts_on": None, "ends_on": None, "max_uses": None, "used": 0}
+        data.update(over)
+        return data
+    check("истёк — после последнего дня", promocodes.status(row(ends_on=(today - timedelta(days=1)).isoformat())) == "expired")
+    check("в последний день ещё активен", promocodes.status(row(ends_on=today.isoformat())) == "active")
+    check("ещё не начался", promocodes.status(row(starts_on=(today + timedelta(days=1)).isoformat())) == "scheduled")
+    check("исчерпан — все применения использованы", promocodes.status(row(max_uses=5, used=5)) == "exhausted")
+    check("выключенный — выключен, даже если истёк",
+          promocodes.status(row(enabled=0, ends_on=(today - timedelta(days=9)).isoformat())) == "disabled")
+
+    # Промокод, который уже применяли (применение — следующий этап, здесь — прямо в базе).
+    used = await promocodes.create({"code": "USED-ONE", "kind": "rub", "value": 300, "maxUses": 10}, plain, actor)
+    await db.conn().execute("UPDATE promo_codes SET used = 3 WHERE id = ?", (used["id"],))
+    await db.conn().commit()
+    check("применённый промокод не удалить", await refused(promocodes.remove(used["id"], actor), "только выключить"))
+    check("лимит меньше применений не поставить",
+          await refused(promocodes.update(used["id"], {"maxUses": 2}, plain, actor), "уже применили 3 раза"))
+    check("и он остался в базе", await db.get_promocode(used["id"]) is not None)
+
+    app = build_app(sale, FakeBot(), OrderService(FakeBot(), sale))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    seller = {"X-Init-Data": make_init_data(SELLER, "Продавец")}
+    buyer = {"X-Init-Data": make_init_data(BUYER)}
+    try:
+        for method, path in (("GET", "/api/seller/promocodes"), ("GET", "/api/seller/promocode?id=1"),
+                             ("GET", "/api/seller/promocode/new"), ("POST", "/api/seller/promocode")):
+            res = await client.request(method, path, headers=buyer, json={"action": "create"} if method == "POST" else None)
+            check("покупателю промокоды недоступны: %s %s" % (method, path.split("?")[0]), res.status == 403, str(res.status))
+
+        res = await client.get("/api/seller/promocode/new", headers=seller)
+        fresh = (await res.json())["code"]
+        check("API даёт случайный код", re_full(r"IAPKI-[A-Z2-9]{6}-[A-Z2-9]{6}", fresh), fresh)
+        res = await client.post("/api/seller/promocode", headers=seller, json={
+            "action": "create", "code": fresh, "kind": "percent", "value": "20", "maxUses": "", "perUser": "1",
+            "startsOn": "", "endsOn": "", "enabled": True, "note": "",
+        })
+        data = await res.json()
+        made = data.get("promocode") or {}
+        check("продавец создал промокод из формы", res.status == 200 and made.get("code") == fresh, str(data)[:200])
+        check("в ответе цена с акцией и промокодом",
+              made.get("prices") and made["prices"][0]["finalText"] == "1 200 ₽", str(made.get("prices")))
+        res = await client.post("/api/seller/promocode", headers=seller, json={"action": "create", "code": "X1", "kind": "percent", "value": 5})
+        check("ошибка в поле — 400 с объяснением", res.status == 400 and "от 4 до 32" in (await res.json())["error"])
+
+        res = await client.get("/api/seller/promocodes?status=active", headers=seller)
+        data = await res.json()
+        check("список с отбором по статусу",
+              res.status == 200 and all(p["status"] == "active" for p in data["promocodes"])
+              and data["counts"]["active"] == len(data["promocodes"]) and data["total"] == 3, str(data["counts"]))
+        res = await client.get("/api/seller/promocodes?status=whatever", headers=seller)
+        check("неизвестный статус — 400", res.status == 400)
+
+        res = await client.get("/api/seller/promocode?id=%d" % made["id"], headers=seller)
+        check("карточка промокода", res.status == 200 and (await res.json())["promocode"]["code"] == fresh)
+        res = await client.post("/api/seller/promocode", headers=seller, json={"action": "disable", "id": made["id"]})
+        check("выключение через API", res.status == 200 and (await res.json())["promocode"]["statusTitle"] == "Выключен")
+        res = await client.post("/api/seller/promocode", headers=seller,
+                                json={"action": "update", "id": made["id"], "kind": "rub", "value": 700})
+        check("правка через API", res.status == 200 and (await res.json())["promocode"]["valueText"] == "700 ₽")
+
+        res = await client.post("/api/seller/promocode", headers=seller, json={"action": "delete", "id": used["id"]})
+        check("применённый не удалить и через API", res.status == 400)
+        res = await client.post("/api/seller/promocode", headers=seller, json={"action": "delete", "id": made["id"]})
+        check("продавец удалил промокод", res.status == 200 and (await res.json()) == {"deleted": True, "code": fresh})
+        check("его нет в базе", await db.get_promocode(made["id"]) is None)
+        left = await db._fetchone("SELECT COUNT(*) AS n FROM events WHERE promo_id = ?", (made["id"],))
+        check("история удалённого ушла вместе с ним", left["n"] == 0)
+        log_row = await db._fetchone(
+            "SELECT * FROM events WHERE type = 'promo_deleted' AND promo_id IS NULL ORDER BY id DESC LIMIT 1"
+        )
+        check("в журнале — кто и что удалил", log_row and log_row["actor"] == actor and fresh in log_row["detail"], str(log_row))
+        res = await client.get("/api/seller/promocode?id=%d" % made["id"], headers=seller)
+        check("удалённый — 404", res.status == 404)
+        res = await client.post("/api/seller/promocode", headers=seller, json={"action": "explode", "id": 1})
+        check("неизвестное действие — 400", res.status == 400)
+    finally:
+        await client.close()
+
+
+def re_full(pattern: str, value: str) -> bool:
+    return re.fullmatch(pattern, value) is not None
+
+
 async def test_ipa(cfg, bot: FakeBot, svc: OrderService) -> None:
     print("\nВитрина из сборок")
     folder = pathlib.Path(tempfile.mkdtemp())
@@ -1625,6 +1813,9 @@ async def main() -> int:
     await db.init(os.path.join(tmp, "analytics.sqlite3"))
     await test_analytics(cfg)
     await test_delete_and_effects(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "promocodes.sqlite3"))
+    await test_promocodes(cfg)
     await db.close()
     await test_migration(tmp)
 

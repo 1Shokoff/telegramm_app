@@ -151,6 +151,56 @@ def seller_order_kb(order: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def promo_cb(action: str, promo_id: int) -> str:
+    return "pc:%s:%d" % (action, promo_id)
+
+
+def parse_promo_cb(data: str) -> tuple[str, int] | None:
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "pc":
+        return None
+    try:
+        return parts[1], int(parts[2])
+    except ValueError:
+        return None
+
+
+def promocodes_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    """Список /promos: код, скидка и статус — нажатие открывает карточку."""
+    return _rows(*[
+        [
+            InlineKeyboardButton(
+                text="%s · %s · %s" % (p["code"], p["valueText"], p["statusTitle"]),
+                callback_data=promo_cb("card", p["id"]),
+            )
+        ]
+        for p in items
+    ])
+
+
+def promocode_kb(p: dict, confirm_delete: bool = False) -> InlineKeyboardMarkup:
+    """Под карточкой промокода: скопировать, выключить или включить, удалить."""
+    pid = p["id"]
+    toggle = (
+        InlineKeyboardButton(text="⏸ Выключить", callback_data=promo_cb("off", pid))
+        if p["enabled"]
+        else InlineKeyboardButton(text="▶️ Включить", callback_data=promo_cb("on", pid))
+    )
+    rows = [
+        [InlineKeyboardButton(text="📋 Скопировать код", copy_text=CopyTextButton(text=p["code"]))],
+        [toggle, InlineKeyboardButton(text="🔄 Обновить", callback_data=promo_cb("card", pid))],
+    ]
+    if confirm_delete:
+        rows.append([
+            InlineKeyboardButton(text="🗑 Да, удалить", callback_data=promo_cb("delyes", pid)),
+            InlineKeyboardButton(text="Оставить", callback_data=promo_cb("card", pid)),
+        ])
+    elif p["canDelete"]:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=promo_cb("del", pid))])
+    rows.append([InlineKeyboardButton(text="‹ Все промокоды", callback_data=promo_cb("list", 0))])
+    return _rows(*rows)
+
+
 def supplier_order_kb(order: dict) -> InlineKeyboardMarkup:
     """Поставщику нужны только UDID и кнопка скопировать его.
 

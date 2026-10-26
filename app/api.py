@@ -18,6 +18,7 @@ from . import (
     ipa as ipa_mod,
     legal,
     pages,
+    promocodes,
     texts,
     udid as udid_mod,
 )
@@ -785,6 +786,74 @@ async def seller_action(request: web.Request) -> web.Response:
         raise ApiError("Неизвестное действие: %s" % action)
 
     return web.json_response({"order": order_public(await with_user(order), full=True)})
+
+
+# ----------------------------------------------------------------- промокоды
+
+
+def promo_id_of(raw) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный id промокода")
+
+
+def promo_error(exc: promocodes.PromoError) -> ApiError:
+    return ApiError(str(exc), status=404 if isinstance(exc, promocodes.PromoNotFound) else 400)
+
+
+@routes.get("/api/seller/promocodes")
+async def seller_promocodes(request: web.Request) -> web.Response:
+    """Промокоды продавца: status=active|scheduled|expired|exhausted|disabled|all."""
+    await require_seller(request)
+    status = request.query.get("status") or "all"
+    if status != "all" and status not in promocodes.STATUSES:
+        raise ApiError("Неизвестный статус: %s" % status)
+    return web.json_response(await promocodes.listing(cfg_of(request), status))
+
+
+@routes.get("/api/seller/promocode")
+async def seller_promocode(request: web.Request) -> web.Response:
+    """Карточка промокода: цены с ним, кто создал, история изменений."""
+    await require_seller(request)
+    try:
+        promo = await promocodes.get(promo_id_of(request.query.get("id")))
+    except promocodes.PromoError as exc:
+        raise promo_error(exc)
+    return web.json_response({"promocode": await promocodes.details(promo, cfg_of(request))})
+
+
+@routes.get("/api/seller/promocode/new")
+async def seller_promocode_new(request: web.Request) -> web.Response:
+    """Случайный код для формы — до сохранения продавец может его поменять."""
+    await require_seller(request)
+    return web.json_response({"code": promocodes.generate()})
+
+
+@routes.post("/api/seller/promocode")
+async def seller_promocode_action(request: web.Request) -> web.Response:
+    """action: create · update · enable · disable · delete. Поля формы — рядом с action."""
+    user = await require_seller(request)
+    data = await body(request)
+    action = str(data.get("action", ""))
+    actor = "seller:%d" % user.id
+    cfg = cfg_of(request)
+    try:
+        if action == "create":
+            promo = await promocodes.create(data, cfg, actor)
+        elif action == "update":
+            promo = await promocodes.update(promo_id_of(data.get("id")), data, cfg, actor)
+        elif action in ("enable", "disable"):
+            promo = await promocodes.set_enabled(promo_id_of(data.get("id")), action == "enable", actor)
+        elif action == "delete":
+            old = await promocodes.remove(promo_id_of(data.get("id")), actor)
+            log.info("Продавец %s удалил промокод %s", user.id, old["code"])
+            return web.json_response({"deleted": True, "code": old["code"]})
+        else:
+            raise ApiError("Неизвестное действие: %s" % action)
+    except promocodes.PromoError as exc:
+        raise promo_error(exc)
+    return web.json_response({"promocode": await promocodes.details(promo, cfg)})
 
 
 # ----------------------------------------------------------------- поставщик

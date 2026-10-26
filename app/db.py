@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS events (
     actor      TEXT NOT NULL,
     type       TEXT NOT NULL,
     detail     TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- История промокода: создан, изменён, включён, выключен.
+    promo_id   INTEGER REFERENCES promo_codes(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_order ON events(order_id, id);
@@ -86,6 +88,30 @@ CREATE TABLE IF NOT EXISTS notify_order_prefs (
     order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     enabled  INTEGER NOT NULL,
     PRIMARY KEY (user_id, order_id)
+);
+
+-- Промокоды: создают и правят продавцы, публикуют сами, где нужно.
+CREATE TABLE IF NOT EXISTS promo_codes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Заглавными буквами; после создания не меняется — код уже опубликован.
+    code       TEXT    NOT NULL UNIQUE,
+    -- percent — скидка в процентах (1–99), rub — в рублях.
+    kind       TEXT    NOT NULL,
+    value      INTEGER NOT NULL,
+    -- Даты по Москве (2026-11-30), обе включительно; NULL — без ограничения.
+    starts_on  TEXT,
+    ends_on    TEXT,
+    -- Сколько применений всего и на одного покупателя; NULL — без лимита.
+    max_uses   INTEGER,
+    per_user   INTEGER,
+    -- Сколько раз применён. Пока промокоды к заказам не применяются — всегда 0.
+    used       INTEGER NOT NULL DEFAULT 0,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    -- Для продавцов: где опубликован, для кого. Покупатель её не видит.
+    note       TEXT,
+    created_by TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL
 );
 """
 
@@ -136,6 +162,14 @@ async def _migrate() -> None:
     if "is_test" not in columns:
         await conn().execute("ALTER TABLE orders ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
         log.info("Миграция: добавлена колонка orders.is_test")
+    events = {row["name"] for row in await _fetchall("PRAGMA table_info(events)")}
+    if "promo_id" not in events:
+        await conn().execute(
+            "ALTER TABLE events ADD COLUMN promo_id INTEGER REFERENCES promo_codes(id) ON DELETE CASCADE"
+        )
+        log.info("Миграция: добавлена колонка events.promo_id")
+    # Индекс — здесь, а не в SCHEMA: в старой базе колонка появляется только сейчас.
+    await conn().execute("CREATE INDEX IF NOT EXISTS idx_events_promo ON events(promo_id, id)")
     await conn().commit()
 
 
@@ -535,6 +569,82 @@ async def add_event(order_id: int | None, actor: str, type_: str, detail: str | 
 async def list_events(order_id: int, limit: int = 50) -> list[dict]:
     return await _fetchall(
         "SELECT * FROM events WHERE order_id = ? ORDER BY id DESC LIMIT ?", (order_id, limit)
+    )
+
+
+# ------------------------------------------------------------ промокоды
+
+# Поля, которые продавец задаёт и правит. Сам код и счётчик used сюда не входят.
+PROMO_FIELDS = ("kind", "value", "starts_on", "ends_on", "max_uses", "per_user", "enabled", "note")
+
+
+async def _promo_event(promo_id: int | None, actor: str, type_: str, detail: str | None, ts: str) -> None:
+    await conn().execute(
+        "INSERT INTO events (order_id, promo_id, actor, type, detail, created_at) VALUES (NULL, ?, ?, ?, ?, ?)",
+        (promo_id, actor, type_, detail, ts),
+    )
+
+
+async def list_promocodes() -> list[dict]:
+    return await _fetchall("SELECT * FROM promo_codes ORDER BY id DESC")
+
+
+async def get_promocode(promo_id: int) -> dict | None:
+    return await _fetchone("SELECT * FROM promo_codes WHERE id = ?", (promo_id,))
+
+
+async def get_promocode_by_code(code: str) -> dict | None:
+    """Код хранится заглавными — ищем уже приведённый к ним."""
+    return await _fetchone("SELECT * FROM promo_codes WHERE code = ?", (code,))
+
+
+async def create_promocode(code: str, fields: dict, actor: str, detail: str | None) -> dict:
+    ts = now()
+    cur = await conn().execute(
+        "INSERT INTO promo_codes (code, %s, created_by, created_at, updated_at) VALUES (?, %s, ?, ?, ?)"
+        % (", ".join(PROMO_FIELDS), ", ".join("?" * len(PROMO_FIELDS))),
+        (code, *(fields[key] for key in PROMO_FIELDS), actor, ts, ts),
+    )
+    promo_id = int(cur.lastrowid)
+    await _promo_event(promo_id, actor, "promo_created", detail, ts)
+    await conn().commit()
+    promo = await get_promocode(promo_id)
+    assert promo is not None
+    return promo
+
+
+async def update_promocode(promo_id: int, fields: dict, actor: str, type_: str, detail: str | None) -> dict | None:
+    """Меняет только переданные поля и пишет в историю, что поменялось."""
+    unknown = set(fields) - set(PROMO_FIELDS)
+    if unknown:
+        raise ValueError("Эти поля промокода не меняются: %s" % ", ".join(sorted(unknown)))
+    ts = now()
+    sets = ", ".join("%s = ?" % key for key in fields)
+    await conn().execute(
+        "UPDATE promo_codes SET %s, updated_at = ? WHERE id = ?" % sets, (*fields.values(), ts, promo_id)
+    )
+    await _promo_event(promo_id, actor, type_, detail, ts)
+    await conn().commit()
+    return await get_promocode(promo_id)
+
+
+async def delete_promocode(promo_id: int, actor: str, detail: str) -> bool:
+    """Удаляет промокод, который ни разу не применяли; его история уходит каскадом.
+
+    Сам факт удаления остаётся в журнале без привязки к промокоду — кто,
+    когда и что удалил. Применённый промокод не удаляется: False.
+    """
+    cur = await conn().execute("DELETE FROM promo_codes WHERE id = ? AND used = 0", (promo_id,))
+    if not cur.rowcount:
+        return False
+    await _promo_event(None, actor, "promo_deleted", detail, now())
+    await conn().commit()
+    return True
+
+
+async def list_promo_events(promo_id: int, limit: int = 30) -> list[dict]:
+    return await _fetchall(
+        "SELECT * FROM events WHERE promo_id = ? ORDER BY id DESC LIMIT ?", (promo_id, limit)
     )
 
 

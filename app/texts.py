@@ -63,6 +63,42 @@ def analytics_text(r: dict) -> str:
     return "\n".join(lines)
 
 
+PROMO_HINT = "Создать промокод или поменять его условия — в Mini App: «Продавец» → «Промокоды»."
+
+
+def promocode_list(data: dict, titles: dict[str, str]) -> str:
+    """Шапка /promos: сколько промокодов и в каких они статусах."""
+    if not data["total"]:
+        return "<b>Промокодов пока нет</b>\n\n" + PROMO_HINT
+    counts = " · ".join(
+        "%s %d" % (title, data["counts"][key]) for key, title in titles.items() if data["counts"].get(key)
+    )
+    return "<b>Промокоды</b> · %d\n%s\n\n%s" % (data["total"], e(counts), PROMO_HINT)
+
+
+def promocode_card(p: dict) -> str:
+    """Карточка промокода для продавца — из promocodes.details."""
+    lines = ["🎟 <code>%s</code> · %s" % (e(p["code"]), e(p["statusTitle"])), "", "Скидка: <b>%s</b>" % e(p["valueText"])]
+    for row in p["prices"]:
+        if row["final"]:
+            price = "%s → <b>%s</b>" % (e(row["priceText"]), e(row["finalText"]))
+        else:
+            price = "не сработает: скидка не меньше цены %s" % e(row["priceText"])
+        lines.append("%s: %s" % (e(row["title"]), price))
+    lines += [
+        "Действует: %s" % e(p["periodText"]),
+        "Применён: %s" % e(p["usesText"]),
+        "На одного покупателя: %s" % e(p["perUserText"]),
+    ]
+    if p["note"]:
+        lines.append("Заметка: %s" % e(p["note"]))
+    lines.append("Создал: %s, %s" % (e(p["createdBy"]), when(p["createdAt"])))
+    if not p["canDelete"]:
+        lines.append("\n<i>Промокод уже применяли — удалить нельзя, только выключить.</i>")
+    lines.append("\n<i>%s</i>" % e(PROMO_HINT))
+    return "\n".join(lines)
+
+
 def bot_description(cfg: Config) -> str:
     """Текст профиля бота до нажатия «Старт» (обычный текст, до 512 знаков)."""
     text = (

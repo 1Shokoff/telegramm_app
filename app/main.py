@@ -46,6 +46,7 @@ SELLER_COMMANDS = BUYER_COMMANDS + [
     BotCommand(command="chat", description="Переписка по заказу"),
     BotCommand(command="reply", description="Ответить покупателю"),
     BotCommand(command="stats", description="Продажи и выручка"),
+    BotCommand(command="promos", description="Промокоды"),
     BotCommand(command="sellerhelp", description="Команды продавца"),
 ]
 

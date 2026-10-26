@@ -791,6 +791,54 @@ h2 .test-tag { font-size: 12px; }
 .confirm-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
 .confirm-text { color: var(--muted); font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
 
+/* Промокоды: строка списка, история изменений и форма создания и правки. */
+.order-line .promo-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px; letter-spacing: .3px; overflow-wrap: anywhere;
+}
+.status-dot.promo-active { background: var(--ok); }
+.status-dot.promo-scheduled { background: #0a84ff; }
+.status-dot.promo-exhausted { background: var(--warn); }
+.status-dot.promo-expired, .status-dot.promo-disabled { background: var(--muted); }
+.hist-row { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.hist-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.hist-head { display: flex; justify-content: space-between; gap: 10px; font-weight: 600; }
+.hist-detail { margin-top: 3px; overflow-wrap: anywhere; }
+.hist-row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.pform .field { margin-top: 16px; }
+.pform > .field:first-child { margin-top: 0; }
+/* В форме поля обычного размера: крупный кегль .field input — для UDID. 16px — чтобы iPhone не увеличивал страницу. */
+.pform .field input {
+  font-size: 16px; letter-spacing: 0; padding: 13px 14px;
+  display: block; min-width: 0; min-height: 50px;
+}
+.pform .seg { margin-bottom: 10px; }
+.pform textarea { min-height: 84px; font-size: 16px; }
+.pform .switch-row { border-bottom: 0; padding-bottom: 0; margin-top: 8px; }
+.pform .field input.pf-code, .pf-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .4px; text-transform: uppercase;
+}
+.pf-fixed {
+  background: var(--surface-3); border-radius: var(--radius-m);
+  padding: 13px 14px; font-size: 15px; overflow-wrap: anywhere;
+}
+.input-row { display: flex; gap: 8px; align-items: stretch; }
+.input-row input { flex: 1; }
+.input-row .btn { width: auto; flex: 0 0 auto; }
+.input-row .pf-dice { width: 50px; padding: 0; font-size: 20px; }
+.input-suffix { position: relative; }
+.pform .input-suffix input { padding-right: 40px; }
+.input-suffix span {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-weight: 600; pointer-events: none;
+}
+.pf-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.pf-pair .field input { width: 100%; }
+.pform .pf-pair .field input[type="date"] { font-size: 15px; padding: 12px 10px; }
+.field-hint { color: var(--muted); font-size: 12px; line-height: 1.4; margin-top: 6px; }
+.pf-error { margin: 12px 0 0; }
+
 pre.instruction {
   white-space: pre-wrap;
   /* Инструкция может прийти одним длинным словом — без переноса она

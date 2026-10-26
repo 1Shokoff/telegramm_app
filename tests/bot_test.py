@@ -63,7 +63,7 @@ from aiogram.types import (  # noqa: E402
     Video,
 )
 
-from app import const, db  # noqa: E402
+from app import const, db, promocodes  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.main import build_dispatcher  # noqa: E402
 from app.service import OrderService  # noqa: E402
@@ -492,6 +492,46 @@ async def main() -> int:
     bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/stats"))
     check("покупателю /stats не отвечает аналитикой", not any("Аналитика" in t for t in bot.texts_to(BUYER)))
+
+    print("\nПромокоды")
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/promos"))
+    check("/promos без промокодов — подсказка, где создать",
+          any("Промокодов пока нет" in t and "Mini App" in t for t in bot.texts_to(SELLER)), str(bot.texts_to(SELLER)))
+    promo = await promocodes.create({"code": "OSEN-20", "kind": "percent", "value": 20, "maxUses": 50}, cfg, "seller:%d" % SELLER)
+    spare = await promocodes.create({"code": "SPARE-1", "kind": "rub", "value": 500}, cfg, "seller:%d" % SELLER)
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/promos"))
+    labels = [b[0] for b in buttons_to(bot, SELLER)]
+    check("/promos — список кнопками: код, скидка, статус",
+          "OSEN-20 · 20% · Активен" in labels and "SPARE-1 · 500 ₽ · Активен" in labels, str(labels))
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/promo osen–20"))
+    text = " ".join(bot.texts_to(SELLER))
+    check("/promo КОД — карточка, код ищется без учёта регистра и тире",
+          "<code>OSEN-20</code>" in text and "3 000 ₽ → <b>2 400 ₽</b>" in text and "0 из 50" in text, text[:300])
+    buttons = buttons_to(bot, SELLER)
+    check("под карточкой — скопировать, выключить, удалить",
+          ("📋 Скопировать код", None, "OSEN-20") in buttons
+          and any(b[1] == "pc:off:%d" % promo["id"] for b in buttons)
+          and any(b[1] == "pc:del:%d" % promo["id"] for b in buttons), str(buttons))
+    await dp.feed_update(bot, callback_update(SELLER, "pc:off:%d" % promo["id"]))
+    check("кнопка выключает промокод", not (await db.get_promocode(promo["id"]))["enabled"])
+    bot.reset()
+    await dp.feed_update(bot, callback_update(SELLER, "pc:del:%d" % spare["id"]))
+    check("удаление сначала переспрашивает",
+          any(b[1] == "pc:delyes:%d" % spare["id"] for b in buttons_to(bot, SELLER))
+          and await db.get_promocode(spare["id"]) is not None)
+    await dp.feed_update(bot, callback_update(SELLER, "pc:delyes:%d" % spare["id"]))
+    check("после подтверждения промокод удалён", await db.get_promocode(spare["id"]) is None)
+    bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/promo NOPE"))
+    check("неизвестный код — понятный ответ", any("Промокода «NOPE» нет" in t for t in bot.texts_to(SELLER)))
+    bot.reset()
+    await dp.feed_update(bot, message_update(BUYER, "/promos"))
+    await dp.feed_update(bot, callback_update(BUYER, "pc:on:%d" % promo["id"]))
+    check("покупателю промокоды не показываются", not any("OSEN-20" in t for t in bot.texts_to(BUYER)))
+    check("и кнопкой продавца он промокод не включит", not (await db.get_promocode(promo["id"]))["enabled"])
 
     print("\nУведомления")
     bot.reset()
