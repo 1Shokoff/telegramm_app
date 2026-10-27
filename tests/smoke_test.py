@@ -1344,6 +1344,26 @@ async def test_analytics(cfg) -> None:
         except analytics.PeriodError:
             check("кривой период «%s» — ошибка" % bad, True)
 
+    # Опечатка в годе: 01.08.0202 вместо 01.08.2026 давала 22 тысячи месяцев на графике.
+    for bad, needle in (("01.08.0202", "проверьте год"), ("01.01.0001", "проверьте год"),
+                        ("01.08.0202-27.10.2026", "проверьте год")):
+        try:
+            p(bad)
+            check("год с опечаткой «%s» — понятная ошибка" % bad, False)
+        except analytics.PeriodError as exc:
+            check("год с опечаткой «%s» — понятная ошибка" % bad, needle in str(exc), str(exc))
+    try:
+        analytics.period("custom", today + timedelta(days=3), None, today=today)
+        check("период из будущего — ошибка", False)
+    except analytics.PeriodError as exc:
+        check("период из будущего — ошибка", "ещё не наступила" in str(exc), str(exc))
+    rng = analytics.period("custom", today - timedelta(days=5), today + timedelta(days=40), today=today)
+    check("конец в будущем обрезается до сегодня", rng.end == today)
+    longest = await analytics.report(analytics.period("custom", analytics.MIN_DATE, None))
+    months = (today.year - analytics.MIN_DATE.year) * 12 + today.month
+    check("самый длинный период — по месяцу на столбик, с 2020 года",
+          len(longest["series"]["points"]) == months, str(len(longest["series"]["points"])))
+
     # API — только продавцу.
     bot = FakeBot()
     svc = OrderService(bot, cfg)
@@ -1361,7 +1381,8 @@ async def test_analytics(cfg) -> None:
         res = await client.get(url, params={"period": "custom", "from": "2026-10-01", "to": "2026-10-20"},
                                headers={"X-Init-Data": make_init_data(SELLER, "Продавец")})
         check("свои даты через API", res.status == 200 and (await res.json())["period"]["from"] == "2026-10-01")
-        for bad in ({"period": "year"}, {"period": "custom"}, {"period": "custom", "from": "вчера"}):
+        for bad in ({"period": "year"}, {"period": "custom"}, {"period": "custom", "from": "вчера"},
+                    {"period": "custom", "from": "0202-08-01"}, {"period": "custom", "from": "0001-01-01"}):
             res = await client.get(url, params=bad, headers={"X-Init-Data": make_init_data(SELLER, "Продавец")})
             check("кривой период в API — 400 (%s)" % bad, res.status == 400, str(res.status))
     finally:
@@ -1441,6 +1462,9 @@ async def test_analytics_orders(cfg) -> None:
         check("API: продажи за день", res.status == 200 and (await res.json())["count"] == day["count"])
         res = await client.get("/api/seller/analytics/orders", params={"month": "2026-13"}, headers=seller)
         check("API: кривой месяц — 400", res.status == 400)
+        for bad in ({"day": "0202-08-01"}, {"month": "0202-08"}, {"period": "custom", "from": "0202-08-01"}):
+            res = await client.get("/api/seller/analytics/orders", params=bad, headers=seller)
+            check("API: год с опечаткой в списке продаж — 400 (%s)" % bad, res.status == 400, str(res.status))
         res = await client.get("/api/seller/analytics/orders", headers={"X-Init-Data": make_init_data(801)})
         check("API: покупателю список продаж закрыт", res.status == 403)
         res = await client.get("/api/seller/order", params={"id": first["id"]}, headers=seller)

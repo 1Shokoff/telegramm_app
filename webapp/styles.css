@@ -770,6 +770,8 @@ details.disclosure .body { color: var(--muted); font-size: 14px; margin-top: 10p
 
 /* Аналитика: карточки показателей, график выручки, статусы с долями. */
 .an-dates { margin: -4px 0 12px; font-size: 13px; }
+/* Под своими датами отчёт не прилипает к полям. */
+.panel-dates ~ #anReport { margin-top: 14px; }
 .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .metric {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m);

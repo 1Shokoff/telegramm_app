@@ -1284,6 +1284,13 @@ function analyticsPeriod() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(ANALYTICS_KEY) || 'null'); } catch (e) { saved = null; }
     s.period = Object.assign({ key: 'all', from: '', to: '' }, saved || {});
+    // Сохранённый период мог остаться от старой версии с опечаткой в годе
+    // (01.08.0202) — с ним аналитика зависала при каждом открытии.
+    const known = ANALYTICS_PERIODS.some(([key]) => key === s.period.key);
+    if (!known || dateProblem(s.period.from) || dateProblem(s.period.to)) {
+      s.period = { key: 'all', from: '', to: '' };
+      saveAnalyticsPeriod();
+    }
   }
   return s.period;
 }
@@ -1295,13 +1302,78 @@ function saveAnalyticsPeriod() {
 async function loadAnalytics() {
   const p = analyticsPeriod();
   const params = new URLSearchParams({ period: p.key });
+  state.seller.periodError = '';
   if (p.key === 'custom') {
     // Без дат «свои даты» ничего не выбирают — ждём, пока продавец их укажет.
     if (!p.from && !p.to) { state.seller.analytics = null; return; }
     if (p.from) params.set('from', p.from);
     if (p.to) params.set('to', p.to);
   }
-  state.seller.analytics = await api('/api/seller/analytics?' + params.toString());
+  try {
+    state.seller.analytics = await api('/api/seller/analytics?' + params.toString());
+  } catch (err) {
+    if (p.key !== 'custom') throw err;
+    // Свои даты сервер не принял — причину показываем под полями, а не тостом.
+    state.seller.analytics = null;
+    state.seller.periodError = err.message;
+  }
+}
+
+/* ---------------------------------------------------------------- даты */
+
+/* Аналитика и заказы бывают с этой даты; раньше — опечатка в годе. */
+const DATE_MIN = '2020-01-01';
+
+/* Что не так с датой из поля; пусто — дата годится (или поле пустое). */
+function dateProblem(value) {
+  if (!value) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value < DATE_MIN) return 'Проверьте год: даты — с 2020 года.';
+  if (value > mskDate(0)) return 'Эта дата ещё не наступила.';
+  return '';
+}
+
+/* Поля «с» и «по». Поле даты сообщает об изменении на каждой цифре: пока
+   набирают год 2026, в нём успевают побывать 0002, 0020 и 0202. Поэтому дату
+   применяем, когда набор затих (или поле потеряло фокус, или нажат Enter), и
+   только настоящую — с 2020 года по сегодня. До этого экран не перерисовываем:
+   иначе поле пересоздаётся посреди набора и год застревает на 0202. */
+function bindDateRange(fromId, toId, apply) {
+  const from = document.getElementById(fromId);
+  const to = document.getElementById(toId);
+  if (!from || !to) return;
+  const box = from.closest('.panel-dates');
+  let timer = null;
+  const commit = () => {
+    clearTimeout(timer);
+    timer = null;
+    const problem = dateProblem(from.value) || dateProblem(to.value);
+    let note = box.parentElement.querySelector('.date-error');
+    if (problem) {
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'field-error date-error';
+        box.insertAdjacentElement('afterend', note);
+      }
+      note.textContent = problem;
+      return;
+    }
+    if (note) note.remove();
+    apply(from.value, to.value);
+  };
+  [from, to].forEach((input) => {
+    input.setAttribute('min', DATE_MIN);
+    input.setAttribute('max', mskDate(0));
+    input.addEventListener('change', () => {
+      clearTimeout(timer);
+      timer = setTimeout(commit, 700);
+    });
+    input.addEventListener('blur', () => { if (timer) commit(); });
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      commit();
+    });
+  });
 }
 
 /* Переключатель-«таблетка»: подсветка переезжает под выбранную кнопку.
@@ -1381,6 +1453,9 @@ function salesWord(n) {
 function analyticsChart(series) {
   const points = series.points || [];
   if (!points.some((p) => p.count)) return '';
+  // Страховка: сотни столбиков телефон рисует секундами — сервер столько не отдаёт,
+  // но если когда-нибудь отдаст, витрина не должна зависнуть.
+  if (points.length > 400) return '<div class="notice">Период слишком длинный для графика — сузьте его.</div>';
   const unit = series.unit;
   const max = Math.max.apply(null, points.map((p) => p.count));
   const step = Math.max(1, Math.ceil(max / 4));
@@ -1489,7 +1564,6 @@ function viewAnalytics() {
   const s = state.seller;
   if (s.anList) return viewSalesList(s.anList);
   const p = analyticsPeriod();
-  const r = s.analytics;
   const chips = ANALYTICS_PERIODS.map(([key, label]) => (
     '<button class="chip' + (p.key === key ? ' active' : '') + '" data-action="an-period:' + key + '" ' +
       'aria-pressed="' + (p.key === key) + '">' + esc(label) + '</button>'
@@ -1501,9 +1575,30 @@ function viewAnalytics() {
       '</div>'
     : '';
   const head = '<h1>Продавец</h1>' + sellerModeSwitch() + '<div class="filters">' + chips + '</div>' + dates;
+  return head + '<div id="anReport">' + analyticsReport() + '</div>';
+}
+
+/* Свои даты: перерисовываем только отчёт — поля дат остаются на месте,
+   и набор во втором поле не прерывается, пока грузится первое. */
+function paintAnalyticsReport() {
+  const box = document.getElementById('anReport');
+  if (!box) { render(); return; }
+  box.innerHTML = analyticsReport();
+  animateNumbers(box);
+  box.querySelectorAll('.chart-scroll').forEach((el) => {
+    el.scrollLeft = el.scrollWidth;
+    bindScrollX(el);
+  });
+}
+
+function analyticsReport() {
+  const s = state.seller;
+  const p = analyticsPeriod();
+  const r = s.analytics;
   if (!r) {
-    return head + '<div class="notice">' +
-      (p.key === 'custom' ? 'Укажите даты периода.' : 'Загружаем…') + '</div>';
+    if (s.periodError) return '<div class="notice warn">' + esc(s.periodError) + '</div>';
+    return '<div class="notice">' +
+      (p.key === 'custom' ? 'Укажите даты периода: с 2020 года по сегодня.' : 'Загружаем…') + '</div>';
   }
 
   // Карточка показателя — кнопка: открывает продажи, из которых он сложился.
@@ -1523,7 +1618,6 @@ function viewAnalytics() {
   )).join('');
 
   return (
-    head +
     '<div class="muted an-dates">' + esc(r.period.datesText) + '</div>' +
     '<div class="metrics">' +
       metric('Продажи', String(r.sales.count), r.sales.count) +
@@ -1849,8 +1943,9 @@ function sellerListHtml() {
 
 let sellerSearchSeq = 0;
 
-async function refreshSellerList() {
+async function refreshSellerList(keepTools) {
   // Перерисовываем только список: поле ввода остаётся на месте, фокус и клавиатура тоже.
+  // keepTools — не трогать и панель фильтров: в ней поля дат, которые сейчас заполняют.
   const seq = ++sellerSearchSeq;
   let data;
   try {
@@ -1866,7 +1961,7 @@ async function refreshSellerList() {
   if (list) list.innerHTML = sellerListHtml();
   // Поиск выключает фильтры подгрупп — панель под полем должна это показать.
   const tools = document.getElementById('sellerTools');
-  if (tools) tools.innerHTML = sellerToolbar();
+  if (tools && !keepTools) tools.innerHTML = sellerToolbar();
 }
 
 /* -------------------------------------------- продавец: сортировка и фильтры */
@@ -1911,6 +2006,8 @@ function sellerPrefs(group) {
   }
   // Недостающие поля добираем значениями по умолчанию — на случай старого сохранения.
   s.prefs[group] = Object.assign(defaultSellerPrefs(), s.prefs[group] || {});
+  // Дата с опечаткой в годе (0202) могла сохраниться до проверки ввода — забываем её.
+  ['from', 'to'].forEach((key) => { if (dateProblem(s.prefs[group][key])) s.prefs[group][key] = ''; });
   return s.prefs[group];
 }
 
@@ -2499,23 +2596,23 @@ function bindInputs() {
     });
   }
 
-  ['anFrom', 'anTo'].forEach((id) => {
-    const input = document.getElementById(id);
-    if (!input) return;
-    input.addEventListener('change', () => {
-      analyticsPeriod()[id === 'anFrom' ? 'from' : 'to'] = input.value;
-      saveAnalyticsPeriod();
-      guard(async () => { await loadAnalytics(); render(); });
-    });
+  bindDateRange('anFrom', 'anTo', (from, to) => {
+    const p = analyticsPeriod();
+    if (p.from === from && p.to === to) return;
+    p.from = from;
+    p.to = to;
+    saveAnalyticsPeriod();
+    guard(async () => { await loadAnalytics(); paintAnalyticsReport(); });
   });
 
-  ['sellerFrom', 'sellerTo'].forEach((id) => {
-    const input = document.getElementById(id);
-    if (!input) return;
-    input.addEventListener('change', () => {
-      sellerPrefs(state.seller.status)[id === 'sellerFrom' ? 'from' : 'to'] = input.value;
-      sellerPrefsChanged();
-    });
+  bindDateRange('sellerFrom', 'sellerTo', (from, to) => {
+    const prefs = sellerPrefs(state.seller.status);
+    if (prefs.from === from && prefs.to === to) return;
+    prefs.from = from;
+    prefs.to = to;
+    saveSellerPrefs();
+    // Панель с полями дат не трогаем — обновляется только список.
+    refreshSellerList(true);
   });
 
   // Поле промокода покупателя: текст живёт в состоянии, Enter — «Применить».

@@ -31,6 +31,11 @@ PERIODS = {
 # Дольше этого — график по месяцам, иначе столбики не разглядеть.
 DAILY_LIMIT = 62
 
+# Раньше этой даты аналитики нет. Опечатка в годе (0202 вместо 2026) иначе
+# давала график на восемнадцать веков — 22 тысячи столбиков вешали витрину,
+# а год 0001 ронял сервер.
+MIN_DATE = date(2020, 1, 1)
+
 # Продажа: оплата подтверждена, заказ не тестовый и не демо.
 _SALE = "paid_at IS NOT NULL AND is_test = 0 AND payment_mode != 'demo'"
 
@@ -71,18 +76,46 @@ def _day(day: date) -> str:
     return "%d %s" % (day.day, MONTHS_GENITIVE[day.month - 1])
 
 
+def _ddmmyyyy(day: date) -> str:
+    # Вручную, а не strftime: год 202 тот печатает то «202», то «0202».
+    return "%02d.%02d.%04d" % (day.day, day.month, day.year)
+
+
+def check_day(day: date, today: date | None = None) -> date:
+    """День, за который бывает аналитика: с MIN_DATE по сегодня (по Москве)."""
+    today = today or today_msk()
+    if day < MIN_DATE:
+        raise PeriodError(
+            "Дата %s раньше %s — проверьте год." % (_ddmmyyyy(day), _ddmmyyyy(MIN_DATE))
+        )
+    if day > today:
+        raise PeriodError("Дата %s ещё не наступила." % _ddmmyyyy(day))
+    return day
+
+
 def period(key: str = "all", date_from: date | None = None, date_to: date | None = None,
            today: date | None = None) -> Period:
-    """Период по ключу или по своим датам (обе включительно)."""
+    """Период по ключу или по своим датам (обе включительно).
+
+    Свои даты — с MIN_DATE по сегодня; конец в будущем обрезается до сегодня.
+    """
     today = today or today_msk()
     if key == "custom":
         if not date_from and not date_to:
             raise PeriodError("Укажите хотя бы одну дату периода.")
+        for day in (date_from, date_to):
+            if day is not None and day < MIN_DATE:
+                check_day(day, today)
+        # Начало проверяем до перестановки: «с» в будущем без «по» иначе
+        # молча превратилось бы в «сегодня».
+        if date_from is not None:
+            check_day(date_from, today)
         start = date_from or date_to
         end = date_to or today
         if start > end:
             start, end = end, start
-        return Period("custom", "Свои даты", start, end)
+        check_day(start, today)
+        return Period("custom", "Свои даты", start, min(end, today))
     if key == "today":
         return Period(key, PERIODS[key], today, today)
     if key == "7d":
@@ -247,13 +280,16 @@ async def sales(p: Period | None = None, day: date | None = None, month: str | N
     после оплаты. Свежие сверху.
     """
     if day is not None:
-        title, dates = "Продажи за %s" % _day(day), day.strftime("%d.%m.%Y")
+        check_day(day)
+        title, dates = "Продажи за %s" % _day(day), _ddmmyyyy(day)
         bounds = (_utc(day), _utc(day + timedelta(days=1)))
     elif month is not None:
         match = _MONTH.match(month)
         if not match or not 1 <= int(match.group(2)) <= 12:
             raise PeriodError("Месяц пишется как 2026-10: «%s» не разобрать." % month)
         start = date(int(match.group(1)), int(match.group(2)), 1)
+        if start < MIN_DATE.replace(day=1) or start > today_msk():
+            raise PeriodError("Месяц %s вне аналитики — проверьте год." % month)
         title, dates = "Продажи за %s %d" % (MONTHS[start.month - 1], start.year), ""
         bounds = (_utc(start), _utc((start + timedelta(days=32)).replace(day=1)))
     else:

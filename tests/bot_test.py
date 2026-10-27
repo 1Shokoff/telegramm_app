@@ -490,6 +490,10 @@ async def main() -> int:
     await dp.feed_update(bot, message_update(SELLER, "/stats вчера"))
     check("кривой период — подсказка", any("/stats today" in t for t in bot.texts_to(SELLER)), str(bot.texts_to(SELLER)))
     bot.reset()
+    await dp.feed_update(bot, message_update(SELLER, "/stats 01.08.0202-27.10.2026"))
+    check("опечатка в годе — просьба проверить год, а не отчёт за 18 веков",
+          any("проверьте год" in t for t in bot.texts_to(SELLER)), str(bot.texts_to(SELLER)))
+    bot.reset()
     await dp.feed_update(bot, message_update(BUYER, "/stats"))
     check("покупателю /stats не отвечает аналитикой", not any("Аналитика" in t for t in bot.texts_to(BUYER)))
 
