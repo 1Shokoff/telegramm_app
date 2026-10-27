@@ -9,6 +9,7 @@ import asyncio
 import os
 import sys
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 
 TOKEN = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
@@ -40,6 +41,7 @@ from tests import fixtures  # noqa: E402
 os.environ["IPA_DIR"] = str(fixtures.catalog_folder())
 
 from aiogram import Bot  # noqa: E402
+from aiohttp.test_utils import TestServer  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
 from aiogram.enums import ParseMode  # noqa: E402
 from aiogram.exceptions import TelegramBadRequest  # noqa: E402
@@ -605,6 +607,47 @@ async def main() -> int:
     check("покупателю сказали, что осталось в учёте",
           any("номер заказа, сумма и даты" in t for t in bot.texts_to(BUYER)), str(bot.texts_to(BUYER)))
     check("настройки уведомлений удалены", await db.get_notify_prefs(BUYER) == {})
+
+    print("\nОплата через Platega")
+    fake = fixtures.FakePlatega()
+    pserver = TestServer(fake.app())
+    await pserver.start_server()
+    pcfg = replace(cfg, payment_mode="platega", platega_merchant_id="m", platega_secret="s",
+                   platega_url=str(pserver.make_url("")).rstrip("/"))
+    psvc = OrderService(bot, pcfg)
+    psvc.bot_username = "iapki_bot"
+    # Роутеры — одни на процесс, поэтому второй диспетчер не собрать: подменяем его данные.
+    dp["cfg"], dp["service"] = pcfg, psvc
+    payer = 5151
+    try:
+        bot.reset()
+        await dp.feed_update(bot, callback_update(payer, "nav:buy"))
+        check("на оформлении — «СБП, карта или SberPay»",
+              any("СБП, карта или SberPay" in t for t in bot.texts_to(payer)), str(bot.texts_to(payer))[:300])
+        await dp.feed_update(bot, callback_update(payer, "nav:buy_confirm"))
+        order = await db.get_active_order(payer)
+        check("экран оплаты: страница Platega, чек присылать не нужно",
+              any("присылать чек не нужно" in t for t in bot.texts_to(payer)))
+        check("под ним — «Оплатить»", any(b[1] == "o:pay:%d" % order["id"] for b in buttons_to(bot, payer)))
+        bot.reset()
+        await dp.feed_update(bot, callback_update(payer, "o:pay:%d" % order["id"]))
+        urls = [
+            btn.url for m in bot.calls if getattr(m, "chat_id", None) == payer and getattr(m, "reply_markup", None)
+            for row in m.reply_markup.inline_keyboard for btn in row if btn.url
+        ]
+        check("ссылка на страницу оплаты — кнопкой", bool(urls) and urls[0].startswith("https://pay.platega.io/"), str(urls))
+        bot.reset()
+        await dp.feed_update(bot, callback_update(payer, "o:paycheck:%d" % order["id"]))
+        answers = [m.text or "" for m in bot.calls if isinstance(m, AnswerCallbackQuery)]
+        check("«проверить» до оплаты — «пока не поступила»", any("пока не поступила" in a for a in answers), str(answers))
+        fake.statuses[urls[0].split("id=")[1]] = "CONFIRMED"
+        bot.reset()
+        await dp.feed_update(bot, callback_update(payer, "o:paycheck:%d" % order["id"]))
+        check("после оплаты — «Оплата получена» и запрос UDID", any("Оплата получена" in t for t in bot.texts_to(payer)))
+        check("заказ оплачен без продавца", (await db.get_order(order["id"]))["status"] == const.PAID)
+    finally:
+        dp["cfg"], dp["service"] = cfg, service
+        await pserver.close()
 
     await db.close()
     await bot.session.close()

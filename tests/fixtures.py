@@ -87,3 +87,56 @@ def catalog_folder() -> Path:
         make_ipa(folder / ("%s-%s.ipa" % (slug, version)), name=slug, version=version)
     shutil.copy(ROOT / "catalog.example.toml", folder / "catalog.toml")
     return folder
+
+
+class FakePlatega:
+    """Platega для тестов: aiohttp-приложение с теми же ручками, что у настоящей.
+
+    statuses — что ответит «проверка статуса» по номеру транзакции; тест
+    меняет его сам, как будто покупатель заплатил. fail — Platega лежит.
+    """
+
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+        self.headers: list[dict] = []
+        self.statuses: dict[str, str] = {}
+        self.amounts: dict[str, float] = {}
+        self.fail = False
+
+    def app(self):
+        from aiohttp import web
+
+        app = web.Application()
+        app.router.add_post("/v2/transaction/process", self._create)
+        app.router.add_get("/transaction/{id}", self._status)
+        return app
+
+    async def _create(self, request):
+        from aiohttp import web
+
+        self.headers.append(dict(request.headers))
+        if self.fail:
+            return web.json_response({"message": "Internal error"}, status=500)
+        data = await request.json()
+        self.created.append(data)
+        tid = "00000000-0000-0000-0000-%012d" % len(self.created)
+        self.statuses[tid] = "PENDING"
+        self.amounts[tid] = data["paymentDetails"]["amount"]
+        return web.json_response({
+            "transactionId": tid, "status": "PENDING",
+            "url": "https://pay.platega.io/?id=%s" % tid, "expiresIn": "00:15:00", "rate": 91.2,
+        })
+
+    async def _status(self, request):
+        from aiohttp import web
+
+        tid = request.match_info["id"]
+        if self.fail:
+            return web.json_response({"message": "Internal error"}, status=500)
+        if tid not in self.statuses:
+            return web.json_response({"message": "not found"}, status=404)
+        return web.json_response({
+            "id": tid, "status": self.statuses[tid],
+            "paymentDetails": {"amount": self.amounts[tid], "currency": "RUB"},
+            "paymentMethod": "SBPQR", "expiresIn": "00:15:00",
+        })

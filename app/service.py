@@ -18,7 +18,7 @@ from aiogram.exceptions import (
 )
 from aiogram.types import InlineKeyboardMarkup
 
-from . import catalog, const, db, keyboards, promocodes, texts, udid as udid_mod
+from . import catalog, const, db, keyboards, platega as platega_mod, promocodes, texts, udid as udid_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,16 @@ class OrderService:
         # в одном процессе, и двойное нажатие не должно занять два применения.
         self._promo_lock = asyncio.Lock()
         self._promo_fails: dict[int, deque] = defaultdict(deque)
+        # Platega есть, когда в .env её ключи; режим оплаты при этом может быть и «перевод».
+        self.platega = (
+            platega_mod.Platega(cfg.platega_merchant_id, cfg.platega_secret, cfg.platega_url)
+            if cfg.platega_enabled else None
+        )
+        # Сюда Platega возвращает покупателя после оплаты; main уточняет его после get_me.
+        self.bot_username = cfg.bot_username
+        # Ссылка и сверка — по одной на заказ и на транзакцию: двойное нажатие
+        # не создаст две транзакции, уведомление и опрос не подтвердят заказ дважды.
+        self._pay_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # ------------------------------------------------------------ отправка
 
@@ -234,6 +244,11 @@ class OrderService:
         """
         if not order or order["status"] != const.NEW:
             return order
+        if order["payment_mode"] != self.cfg.payment_mode:
+            # PAYMENT_MODE переключили (Platega ↔ перевод с чеком) — неоплаченный
+            # заказ платится уже новым способом. Выданную ссылку Platega всё равно
+            # можно оплатить: уведомление о ней примем.
+            order = await db.set_payment_mode(order["id"], self.cfg.payment_mode) or order
         base = self._base_price(order)
         if base is None:
             return order  # сборку убрали — цену не угадываем
@@ -622,6 +637,161 @@ class OrderService:
         else:
             await self.push_order_to_sellers(updated, "🚫 <b>Покупатель отменил заказ</b>", const.NOTIFY_STATUS)
         return updated
+
+    # ------------------------------------------------------------- Platega
+
+    def _return_url(self) -> str:
+        """Куда Platega возвращает покупателя: в чат бота, там придёт подтверждение."""
+        if self.bot_username:
+            return "https://t.me/%s" % self.bot_username
+        return self.cfg.webapp_url or "https://t.me"
+
+    async def payment_link(self, order_id: int, user_id: int) -> dict:
+        """Ссылка на оплату в Platega. Живая ссылка на ту же сумму выдаётся снова;
+        истекла или цена с тех пор изменилась (промокод, акция) — новая транзакция."""
+        if self.platega is None:
+            raise ServiceError("Онлайн-оплата сейчас выключена — напишите продавцу.")
+        async with self._pay_locks["order:%d" % order_id]:
+            order = await self._load(order_id)
+            if order["user_id"] != user_id:
+                raise ServiceError("Это не ваш заказ.")
+            order = await self.fresh_price(order) or order
+            if order["status"] != const.NEW:
+                raise ServiceError("Заказ уже оплачен." if order.get("paid_at") else "Заказ закрыт — оформите новый.")
+            if order["payment_mode"] != platega_mod.PROVIDER:
+                raise ServiceError("Этот заказ оплачивается переводом — реквизиты на экране оплаты.")
+
+            last = await db.last_payment(order_id)
+            # Минута в запасе: покупатель не должен попасть на страницу, которая
+            # закроется, пока он открывает банк.
+            fresh_until = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(timespec="seconds")
+            if (last and last["status"] == platega_mod.PENDING and last["amount"] == order["price_rub"]
+                    and (last["expires_at"] or "") > fresh_until):
+                return {"url": last["url"], "amount": last["amount"], "expiresAt": last["expires_at"]}
+
+            user = await db.get_user(user_id) or {}
+            name = "@" + user["username"] if user.get("username") else (user.get("first_name") or "")
+            try:
+                link = await self.platega.create(
+                    amount=order["price_rub"],
+                    description="Заказ %s · %s" % (order["code"], catalog.product_name(order.get("app_slug"))),
+                    order_id=order["code"],
+                    payload=str(order["id"]),
+                    user_id=user_id,
+                    user_name=name,
+                    return_url=self._return_url(),
+                    failed_url=self._return_url(),
+                )
+            except platega_mod.PlategaError as exc:
+                log.warning("Platega: ссылка для заказа %s не создана: %s", order["code"], exc)
+                raise ServiceError("Платёжный сервис не ответил — попробуйте через минуту.")
+            payment = await db.create_payment(
+                order_id, platega_mod.PROVIDER, link.transaction_id, order["price_rub"], link.status,
+                link.url, link.expires_at.isoformat(timespec="seconds"),
+            )
+        log.info("Заказ %s: ссылка Platega %s на %s ₽", order["code"], link.transaction_id, order["price_rub"])
+        return {"url": payment["url"], "amount": payment["amount"], "expiresAt": payment["expires_at"]}
+
+    async def check_payment(self, order_id: int, user_id: int | None = None) -> dict:
+        """«Я оплатил — проверить»: спрашиваем Platega сами, не дожидаясь уведомления."""
+        order = await self._load(order_id)
+        if user_id is not None and order["user_id"] != user_id:
+            raise ServiceError("Это не ваш заказ.")
+        if self.platega is not None:
+            for payment in await db.order_payments(order_id, platega_mod.PENDING):
+                try:
+                    await self.sync_payment(payment)
+                except platega_mod.PlategaError as exc:
+                    log.warning("Platega: проверка %s не удалась: %s", payment["external_id"], exc)
+                    raise ServiceError("Не получилось связаться с платёжным сервисом — попробуйте через минуту.")
+        return await self._load(order_id)
+
+    async def sync_payment(self, payment: dict) -> dict | None:
+        """Сверяет транзакцию со статусом в Platega и делает выводы для заказа.
+
+        Статус берём только у самой Platega — уведомлению без подписи верим лишь
+        как поводу спросить. PlategaError — Platega не ответила, попробуем позже.
+        """
+        assert self.platega is not None
+        async with self._pay_locks["tx:" + payment["external_id"]]:
+            current = await db.get_payment(payment["external_id"]) or payment
+            found = await self.platega.status(current["external_id"])
+            if found.status == current["status"]:
+                return None
+            await db.set_payment_status(current["id"], found.status)
+            order = await db.get_order(current["order_id"]) if current["order_id"] else None
+            if order is None:
+                log.warning("Platega: транзакция %s (%s) без заказа", current["external_id"], found.status)
+                if found.status == platega_mod.CONFIRMED:
+                    await self.notify_sellers(
+                        "⚠️ <b>Оплата через Platega по удалённому заказу</b>\nТранзакция <code>%s</code> · %s"
+                        % (texts.e(current["external_id"]), texts.money(round(found.amount or current["amount"]))),
+                        kind=const.NOTIFY_PAYMENT,
+                    )
+                return None
+            if found.status == platega_mod.CONFIRMED:
+                return await self._platega_paid(order, current, found)
+            if found.status in platega_mod.REFUNDS:
+                await self.platega_refund(order, current["external_id"], found.status, None)
+            elif found.status == platega_mod.CANCELED:
+                await db.add_event(order["id"], "platega", "payment_canceled", current["external_id"])
+            return order
+
+    async def _platega_paid(self, order: dict, payment: dict, found: platega_mod.Status) -> dict:
+        paid = round(found.amount) if found.amount else payment["amount"]
+        await db.add_event(order["id"], "platega", "payment_confirmed", "%s · %d ₽" % (payment["external_id"], paid))
+        if order["status"] not in (const.NEW, const.PAYMENT_CHECK):
+            if order["status"] == const.CANCELLED and not order.get("paid_at"):
+                # Ссылку оплатили уже после отмены заказа — деньги пришли, решает продавец.
+                await self.push_order_to_sellers(
+                    order,
+                    "⚠️ <b>Оплата по отменённому заказу</b> — %s через Platega.\n"
+                    "Верните деньги в кабинете Platega или восстановите заказ с покупателем." % texts.money(paid),
+                    const.NOTIFY_PAYMENT,
+                )
+            return order
+        if paid < order["price_rub"]:
+            # Ссылку выдали до того, как цена выросла (например, убрали промокод).
+            await self.push_order_to_sellers(
+                order,
+                "⚠️ <b>Оплачено меньше цены заказа</b>: %s через Platega вместо %s.\n"
+                "Проверьте и подтвердите оплату вручную." % (texts.money(paid), texts.money(order["price_rub"])),
+                const.NOTIFY_PAYMENT,
+            )
+            return order
+        updated = await self.confirm_payment(order["id"], "platega", ref=payment["external_id"])
+        await self.push_order_to_sellers(
+            updated, "💳 <b>Оплата получена через Platega</b> · %s" % texts.money(paid), const.NOTIFY_PAYMENT
+        )
+        log.info("Заказ %s оплачен через Platega: %s", order["code"], payment["external_id"])
+        return updated
+
+    async def platega_refund(self, order: dict, transaction_id: str, status: str, amount: float | None) -> None:
+        """Деньги вернули покупателю (из кабинета Platega или банк оспорил платёж).
+        Заказ сам не трогаем — продавцу сообщение, решает он."""
+        what = "частичный возврат" if status == platega_mod.PARTIALLY_REFUNDED else "возврат"
+        sum_text = " · %s" % texts.money(round(amount)) if amount else ""
+        await db.add_event(order["id"], "platega", "refund", "%s %s%s" % (transaction_id, what, sum_text))
+        await self.push_order_to_sellers(
+            order, "💸 <b>Platega: %s по заказу</b>%s" % (what, sum_text), const.NOTIFY_PAYMENT
+        )
+
+    async def poll_payments(self, window_minutes: int = 40) -> int:
+        """Подстраховка уведомлений: статус свежих неоплаченных ссылок спрашиваем сами."""
+        if self.platega is None:
+            return 0
+        since = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat(timespec="seconds")
+        changed = 0
+        for payment in await db.pending_payments(since):
+            try:
+                if await self.sync_payment(payment) is not None:
+                    changed += 1
+            except platega_mod.PlategaError as exc:
+                log.warning("Platega: опрос %s не удался: %s", payment["external_id"], exc)
+                break  # Platega недоступна — остальные спросим в следующий раз
+            except Exception:
+                log.exception("Platega: опрос %s", payment["external_id"])
+        return changed
 
     # ----------------------------------------------------------- автоотмена
 

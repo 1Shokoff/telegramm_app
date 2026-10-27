@@ -96,6 +96,28 @@ CREATE TABLE IF NOT EXISTS notify_order_prefs (
     PRIMARY KEY (user_id, order_id)
 );
 
+-- Платежи через платёжный сервис (Platega): одна строка на каждую выданную
+-- ссылку. У заказа их может быть несколько — ссылка живёт 15 минут.
+-- При удалении заказа платёж остаётся: деньги-то были.
+CREATE TABLE IF NOT EXISTS payments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id    INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+    provider    TEXT    NOT NULL,
+    -- Номер транзакции у платёжного сервиса.
+    external_id TEXT    NOT NULL UNIQUE,
+    -- Сумма в рублях, на которую выдана ссылка.
+    amount      INTEGER NOT NULL,
+    -- PENDING, CONFIRMED, CANCELED, CHARGEBACKED, PARTIALLY_REFUNDED.
+    status      TEXT    NOT NULL,
+    url         TEXT,
+    -- После этого момента (UTC) ссылку покупателю не показываем — выдаём новую.
+    expires_at  TEXT,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id, id);
+
 -- Промокоды: создают и правят продавцы, публикуют сами, где нужно.
 CREATE TABLE IF NOT EXISTS promo_codes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -513,6 +535,71 @@ async def expire_order(order_id: int, before: str, detail: str) -> dict | None:
         return None
     await add_event(order_id, "system", "status:" + const.CANCELLED, detail)
     return await get_order(order_id)
+
+
+async def set_payment_mode(order_id: int, mode: str) -> dict | None:
+    """Режим оплаты неоплаченного заказа — за текущим PAYMENT_MODE, когда его переключили."""
+    await conn().execute(
+        "UPDATE orders SET payment_mode = ?, updated_at = ? WHERE id = ?", (mode, now(), order_id)
+    )
+    await conn().commit()
+    await add_event(order_id, "system", "payment_mode", mode)
+    return await get_order(order_id)
+
+
+# ------------------------------------------------------- платёжный сервис
+
+
+async def create_payment(
+    order_id: int, provider: str, external_id: str, amount: int, status: str, url: str, expires_at: str | None
+) -> dict:
+    ts = now()
+    cur = await conn().execute(
+        "INSERT INTO payments (order_id, provider, external_id, amount, status, url, expires_at, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (order_id, provider, external_id, amount, status, url, expires_at, ts, ts),
+    )
+    await conn().execute(
+        "UPDATE orders SET payment_ref = ?, updated_at = ? WHERE id = ?", (external_id, ts, order_id)
+    )
+    await conn().commit()
+    await add_event(order_id, "system", "payment_link", "%s %s · %d ₽" % (provider, external_id, amount))
+    row = await _fetchone("SELECT * FROM payments WHERE id = ?", (int(cur.lastrowid),))
+    assert row is not None
+    return row
+
+
+async def get_payment(external_id: str) -> dict | None:
+    return await _fetchone("SELECT * FROM payments WHERE external_id = ?", (external_id,))
+
+
+async def last_payment(order_id: int) -> dict | None:
+    return await _fetchone(
+        "SELECT * FROM payments WHERE order_id = ? ORDER BY id DESC LIMIT 1", (order_id,)
+    )
+
+
+async def order_payments(order_id: int, status: str | None = None) -> list[dict]:
+    sql, args = "SELECT * FROM payments WHERE order_id = ?", [order_id]
+    if status:
+        sql += " AND status = ?"
+        args.append(status)
+    return await _fetchall(sql + " ORDER BY id DESC", args)
+
+
+async def pending_payments(since: str) -> list[dict]:
+    """Неоплаченные ссылки, выданные после since, — их статус спрашиваем сами,
+    если уведомление от платёжного сервиса не дошло."""
+    return await _fetchall(
+        "SELECT * FROM payments WHERE status = 'PENDING' AND created_at >= ? ORDER BY id", (since,)
+    )
+
+
+async def set_payment_status(payment_id: int, status: str) -> None:
+    await conn().execute(
+        "UPDATE payments SET status = ?, updated_at = ? WHERE id = ?", (status, now(), payment_id)
+    )
+    await conn().commit()
 
 
 async def set_payment_ref(order_id: int, ref: str) -> None:

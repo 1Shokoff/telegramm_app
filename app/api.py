@@ -18,6 +18,7 @@ from . import (
     ipa as ipa_mod,
     legal,
     pages,
+    platega as platega_mod,
     promocodes,
     texts,
     udid as udid_mod,
@@ -546,6 +547,65 @@ async def demopay(request: web.Request) -> web.Response:
         raise ApiError("Это не ваш заказ", status=403)
     updated = await service_of(request).confirm_payment(order_id, "demo", ref="demo")
     return web.json_response({"order": order_public(updated)})
+
+
+@routes.post("/api/order/platega")
+async def platega_link(request: web.Request) -> web.Response:
+    """Ссылка на страницу оплаты Platega для своего неоплаченного заказа."""
+    user = await current_user(request)
+    data = await body(request)
+    link = await service_of(request).payment_link(order_id_of(data), user.id)
+    return web.json_response(link)
+
+
+@routes.post("/api/order/platega/check")
+async def platega_check(request: web.Request) -> web.Response:
+    """«Я оплатил — проверить»: статус у Platega, не дожидаясь её уведомления."""
+    user = await current_user(request)
+    data = await body(request)
+    order = await service_of(request).check_payment(order_id_of(data), user.id)
+    return web.json_response({"order": order_public(order)})
+
+
+@routes.post("/api/platega/callback")
+async def platega_callback(request: web.Request) -> web.Response:
+    """Уведомление Platega о платеже — адрес указывается в её кабинете.
+
+    Подписи у уведомления нет: Platega присылает наши же X-MerchantId и X-Secret.
+    Сверяем их, а статус оплаты всё равно перепроверяем запросом к Platega.
+    Ответ 200 — «принято»; иначе Platega повторит ещё трижды через 5 минут.
+    """
+    svc = service_of(request)
+    if svc.platega is None:
+        raise web.HTTPNotFound(text="Platega не подключена")
+    if not svc.platega.is_genuine(request.headers.get("X-MerchantId"), request.headers.get("X-Secret")):
+        log.warning("Platega: уведомление с чужими ключами от %s", request.remote)
+        return web.json_response({"ok": False}, status=401)
+    data = await body(request)
+    transaction_id = str(data.get("id") or "")
+    payment = await db.get_payment(transaction_id) if transaction_id else None
+    if not payment:
+        log.warning("Platega: уведомление о незнакомой транзакции %r", transaction_id)
+        return web.json_response({"ok": True})
+    status = str(data.get("status") or "").upper()
+    try:
+        if status in platega_mod.REFUNDS and payment["order_id"]:
+            # Возврат: ключи сверены, а продавцу нужно знать и о частичном —
+            # его в статусе транзакции может и не быть.
+            order = await db.get_order(payment["order_id"])
+            try:
+                refund = float(data["refundAmount"]) if data.get("refundAmount") is not None else None
+            except (TypeError, ValueError):
+                refund = None
+            if order:
+                await db.set_payment_status(payment["id"], status)
+                await svc.platega_refund(order, transaction_id, status, refund)
+        else:
+            await svc.sync_payment(payment)
+    except platega_mod.PlategaError as exc:
+        log.warning("Platega: не сверили %s: %s — ждём повтора", transaction_id, exc)
+        return web.json_response({"ok": False}, status=503)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/order/invoice")

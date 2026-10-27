@@ -400,11 +400,51 @@ def payment_instructions(order: dict, cfg: Config) -> str:
 
 def order_expire_soon(order: dict) -> str:
     """Напоминание за сутки до автоотмены неоплаченного заказа."""
+    tail = (
+        "Оплатить можно кнопкой ниже: СБП, карта или SberPay."
+        if order.get("payment_mode") == "platega"
+        else "Уже оплатили — пришлите сюда чек: скриншот, PDF или ссылку."
+    )
     return (
         "⏳ Заказ <b>%s</b> ждёт оплаты — %s.\n"
-        "Если оплаты не будет, через сутки он отменится автоматически.\n\n"
-        "Уже оплатили — пришлите сюда чек: скриншот, PDF или ссылку."
-        % (e(order["code"]), money(order["price_rub"]))
+        "Если оплаты не будет, через сутки он отменится автоматически.\n\n%s"
+        % (e(order["code"]), money(order["price_rub"]), tail)
+    )
+
+
+# Способ оплаты словами — для оформления заказа в боте и витрине.
+PAYMENT_MODE_TITLES = {
+    "manual": "перевод с подтверждением",
+    "demo": "демо, без списания",
+    "stars": "Telegram Stars",
+    "platega": "онлайн: СБП, карта или SberPay",
+}
+
+
+def platega_payment(order: dict, cfg: Config) -> str:
+    """Экран оплаты в боте, когда платят через Platega: сумма и что будет дальше."""
+    lines = [
+        "<b>Оплата заказа %s</b>" % e(order["code"]),
+        "%s · <b>%s</b>" % (e(catalog.product_name(order.get("app_slug"))), money(order["price_rub"])),
+    ]
+    note = discount_note(order, cfg)
+    if note:
+        lines.append("<i>%s</i>" % e(note))
+    lines += [
+        "",
+        "Нажмите «Оплатить» — откроется страница Platega: СБП, банковская карта "
+        "или SberPay на выбор. Чек пришлёт Platega.",
+        "После оплаты бот сам пришлёт подтверждение — присылать чек не нужно.",
+    ]
+    return "\n".join(lines)
+
+
+def platega_link(order: dict, link: dict) -> str:
+    """Сообщение со ссылкой на оплату."""
+    return (
+        "💳 Ссылка на оплату заказа <b>%s</b> — %s.\n"
+        "Она действует 15 минут. Оплатили — вернитесь в этот чат: подтверждение придёт само, "
+        "обычно за минуту." % (e(order["code"]), money(link["amount"]))
     )
 
 

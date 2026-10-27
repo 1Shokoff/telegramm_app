@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import catalog, const
 
-PAYMENT_MODES = ("manual", "demo", "stars")
+PAYMENT_MODES = ("manual", "demo", "stars", "platega")
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -136,6 +136,16 @@ class Config:
     log_level: str
     # Неоплаченный заказ без изменений столько дней — отменяется сам; 0 — не отменять.
     order_ttl_days: int = 3
+    # Platega: платёжная страница, подтверждение оплаты без продавца. Ключи — только в .env.
+    platega_merchant_id: str = ""
+    platega_secret: str = ""
+    platega_url: str = "https://app.platega.io"
+
+    @property
+    def platega_enabled(self) -> bool:
+        """Ключи есть — принимаем уведомления Platega, даже если режим уже переключили
+        обратно на перевод: ссылки, выданные до переключения, ещё могут оплатить."""
+        return bool(self.platega_merchant_id and self.platega_secret)
 
     @property
     def webapp_enabled(self) -> bool:
@@ -281,6 +291,13 @@ def load_config() -> Config:
     if mode == "stars" and stars <= 0:
         raise SystemExit("PAYMENT_MODE=stars требует PRICE_STARS > 0")
 
+    platega_id, platega_secret = _s("PLATEGA_MERCHANT_ID"), _s("PLATEGA_SECRET")
+    if mode == "platega" and not (platega_id and platega_secret):
+        raise SystemExit(
+            "PAYMENT_MODE=platega требует PLATEGA_MERCHANT_ID и PLATEGA_SECRET — "
+            "они в личном кабинете Platega, «Настройки → Интеграция и API»"
+        )
+
     price = _i("PRICE_RUB", 3000)
     promo = _i("PROMO_PRICE_RUB", 0)
     if promo and promo >= price:
@@ -345,4 +362,7 @@ def load_config() -> Config:
         dev_mode=_b("DEV_MODE", False),
         log_level=_s("LOG_LEVEL", "INFO").upper(),
         order_ttl_days=ttl,
+        platega_merchant_id=platega_id,
+        platega_secret=platega_secret,
+        platega_url=(_s("PLATEGA_URL") or "https://app.platega.io").rstrip("/"),
     )

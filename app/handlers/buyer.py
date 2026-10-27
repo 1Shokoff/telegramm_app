@@ -293,10 +293,8 @@ async def nav_buy(call: CallbackQuery, cfg: Config) -> None:
             texts.e(cfg.product_title),
             texts.promo_line(cfg) + "\n" if cfg.promo_active() else "",
             texts.price_html(cfg),
-            {"manual": "перевод с подтверждением", "demo": "демо, без списания", "stars": "Telegram Stars"}[
-                cfg.payment_mode
-            ],
-            "🎟 Есть промокод — введёте на следующем шаге, под реквизитами.\n" if cfg.payment_mode != "stars" else "",
+            texts.PAYMENT_MODE_TITLES[cfg.payment_mode],
+            "🎟 Есть промокод — введёте на следующем шаге, перед оплатой.\n" if cfg.payment_mode != "stars" else "",
             texts.CONSENT_NOTE,
             texts.legal_footer(cfg),
         ),
@@ -319,10 +317,12 @@ async def nav_buy_confirm(call: CallbackQuery, cfg: Config, service: OrderServic
         await call.answer()
         return
 
-    kb = keyboards.payment_kb(order["id"], cfg.payment_mode, keyboards.held_promo(order))
-    if cfg.payment_mode == "manual":
+    kb = keyboards.payment_kb(order["id"], order["payment_mode"], keyboards.held_promo(order))
+    if order["payment_mode"] == "manual":
         await call.message.answer(texts.payment_instructions(order, cfg), reply_markup=kb)
-    elif cfg.payment_mode == "demo":
+    elif order["payment_mode"] == "platega":
+        await call.message.answer(texts.platega_payment(order, cfg), reply_markup=kb)
+    elif order["payment_mode"] == "demo":
         await call.message.answer(
             "Заказ <b>%s</b> создан. Режим демонстрации: деньги не списываются."
             % texts.e(order["code"]),
@@ -340,6 +340,8 @@ def _payment_text(cfg: Config, order: dict) -> str:
     """Что платить после смены промокода: реквизиты с новой суммой."""
     if order["payment_mode"] == "manual":
         return texts.payment_instructions(order, cfg)
+    if order["payment_mode"] == "platega":
+        return texts.platega_payment(order, cfg)
     return "Заказ <b>%s</b> · к оплате <b>%s</b>. Режим демонстрации: деньги не списываются." % (
         texts.e(order["code"]), texts.money(order["price_rub"])
     )
@@ -451,6 +453,49 @@ async def cb_help_order(call: CallbackQuery, cfg: Config, service: OrderService)
     )
     await call.message.answer("Запрос по заказу <b>%s</b> отправлен.\n%s" % (texts.e(order["code"]), contact))
     await call.answer()
+
+
+# ----------------------------------------------------------------- оплата Platega
+
+
+@router.callback_query(F.data.startswith("o:pay:"))
+async def cb_pay(call: CallbackQuery, service: OrderService) -> None:
+    """«Оплатить»: ссылка на страницу Platega — кнопкой под сообщением."""
+    parsed = keyboards.parse_cb(call.data)
+    if not parsed:
+        return
+    try:
+        link = await service.payment_link(parsed[1], call.from_user.id)
+    except ServiceError as exc:
+        await call.answer(str(exc), show_alert=True)
+        return
+    order = await db.get_order(parsed[1])
+    await call.message.answer(
+        texts.platega_link(order, link),
+        reply_markup=keyboards.platega_link_kb(order["id"], link["url"], texts.money(link["amount"])),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("o:paycheck:"))
+async def cb_paycheck(call: CallbackQuery, service: OrderService) -> None:
+    """«Я оплатил — проверить»: спрашиваем Platega, не дожидаясь её уведомления."""
+    parsed = keyboards.parse_cb(call.data)
+    if not parsed:
+        return
+    try:
+        order = await service.check_payment(parsed[1], call.from_user.id)
+    except ServiceError as exc:
+        await call.answer(str(exc), show_alert=True)
+        return
+    if order["status"] == const.NEW:
+        await call.answer(
+            "Оплата пока не поступила. Если вы уже оплатили, подождите минуту — бот пришлёт подтверждение сам.",
+            show_alert=True,
+        )
+        return
+    # «Оплата получена» с запросом UDID бот уже прислал отдельным сообщением.
+    await call.answer("Оплата получена ✅")
 
 
 # ---------------------------------------------------------------------- промокод

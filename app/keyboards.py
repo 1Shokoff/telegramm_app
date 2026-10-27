@@ -71,6 +71,9 @@ def held_promo(order: dict) -> str | None:
 def payment_kb(order_id: int, mode: str, promo_code: str | None = None) -> InlineKeyboardMarkup:
     if mode == "demo":
         pay = [InlineKeyboardButton(text="Имитировать оплату", callback_data=cb("demopay", order_id))]
+    elif mode == "platega":
+        # Ссылку создаём по нажатию: она живёт 15 минут, а сумма может измениться промокодом.
+        pay = [InlineKeyboardButton(text="💳 Оплатить", callback_data=cb("pay", order_id))]
     elif mode == "stars":
         pay = [InlineKeyboardButton(text="Оплатить в Stars", callback_data=cb("stars", order_id))]
     else:
@@ -85,6 +88,14 @@ def payment_kb(order_id: int, mode: str, promo_code: str | None = None) -> Inlin
             else InlineKeyboardButton(text="🎟 Ввести промокод", callback_data=cb("promo", order_id))
         ]
     return _rows(pay, promo, [InlineKeyboardButton(text="Отменить заказ", callback_data=cb("cancel", order_id))])
+
+
+def platega_link_kb(order_id: int, url: str, amount_text: str) -> InlineKeyboardMarkup:
+    """Под ссылкой на оплату: перейти к оплате и проверить, если подтверждение задержалось."""
+    return _rows(
+        [InlineKeyboardButton(text="💳 Оплатить %s" % amount_text, url=url)],
+        [InlineKeyboardButton(text="🔄 Я оплатил — проверить", callback_data=cb("paycheck", order_id))],
+    )
 
 
 def promo_input_kb(order_id: int) -> InlineKeyboardMarkup:

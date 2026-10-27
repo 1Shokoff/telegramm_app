@@ -65,6 +65,7 @@ from aiohttp import FormData  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
 from app import analytics, auth, bundle, catalog, const, db, ipa as ipa_mod, keyboards, legal, promocodes, texts, udid as udid_mod  # noqa: E402
+from app import platega as platega_mod  # noqa: E402
 from app.api import build_app, order_public  # noqa: E402
 from app.config import MSK, load_config, today_msk  # noqa: E402
 from app.service import OrderService, Receipt, ServiceError  # noqa: E402
@@ -1556,6 +1557,177 @@ async def test_expire(cfg) -> None:
     check("по умолчанию — 3 дня", load_config().order_ttl_days == 3)
 
 
+async def test_platega(cfg) -> None:
+    """Оплата через Platega: ссылка, уведомление, перепроверка, опрос, возвраты, переключение."""
+    print("\nPlatega")
+    fake = fixtures.FakePlatega()
+    server = TestServer(fake.app())
+    await server.start_server()
+    base = str(server.make_url("")).rstrip("/")
+    pcfg = replace(cfg, payment_mode="platega", platega_merchant_id="merchant-1",
+                   platega_secret="secret-1", platega_url=base)
+    bot = FakeBot()
+    svc = OrderService(bot, pcfg)
+    svc.bot_username = "iapki_bot"
+    seller = "seller:%d" % SELLER
+    for uid in range(961, 968):
+        await db.upsert_user(uid, "u%d" % uid, "Покупатель %d" % uid)
+
+    async def refused(coro, needle: str) -> bool:
+        try:
+            await coro
+        except ServiceError as exc:
+            if needle in str(exc):
+                return True
+            print("       отказ: %s" % exc)
+        return False
+
+    check("срок ссылки из ответа Platega",
+          platega_mod.expires_at("00:15:00", datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc))
+          == datetime(2026, 10, 27, 12, 15, tzinfo=timezone.utc))
+
+    a, _ = await svc.get_or_create_order(961)
+    check("новый заказ — оплата через Platega", a["payment_mode"] == "platega")
+    link = await svc.payment_link(a["id"], 961)
+    sent = fake.created[-1]
+    check("ссылка на страницу оплаты", link["url"].startswith("https://pay.platega.io/") and link["amount"] == 3000, str(link))
+    check("в Platega — ключи в заголовках",
+          fake.headers[-1].get("X-MerchantId") == "merchant-1" and fake.headers[-1].get("X-Secret") == "secret-1")
+    check("сумма, номер заказа, Telegram ID для антифрода, возврат в бот",
+          sent["paymentDetails"] == {"amount": 3000, "currency": "RUB"} and sent["orderId"] == a["code"]
+          and sent["metadata"]["userId"] == "961" and sent["metadata"]["userName"] == "@u961"
+          and sent["return"] == "https://t.me/iapki_bot" and sent["payload"] == str(a["id"]), str(sent))
+    check("способ оплаты не задан — выбирает покупатель", "paymentMethod" not in sent)
+    again = await svc.payment_link(a["id"], 961)
+    check("повторное «Оплатить» — та же ссылка, без новой транзакции",
+          again["url"] == link["url"] and len(fake.created) == 1)
+    order = await db.get_order(a["id"])
+    check("номер транзакции записан в заказ", order["payment_ref"] == link["url"].split("id=")[1])
+    check("к чужому заказу ссылку не выдать", await refused(svc.payment_link(a["id"], 962), "не ваш"))
+
+    await promocodes.create({"code": "PAY-10", "kind": "percent", "value": 10}, pcfg, seller)
+    await svc.apply_promo(a["id"], "PAY-10", 961)
+    cheaper = await svc.payment_link(a["id"], 961)
+    check("цена изменилась (промокод) — новая ссылка на новую сумму",
+          cheaper["amount"] == 2700 and len(fake.created) == 2 and cheaper["url"] != link["url"], str(cheaper))
+    tx = cheaper["url"].split("id=")[1]
+
+    app = build_app(pcfg, bot, svc)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    genuine = {"X-MerchantId": "merchant-1", "X-Secret": "secret-1"}
+    try:
+        res = await client.post("/api/platega/callback", json={"id": tx, "status": "CONFIRMED"},
+                                headers={"X-MerchantId": "merchant-1", "X-Secret": "guess"})
+        check("уведомление с чужим ключом — 401, заказ не тронут",
+              res.status == 401 and (await db.get_order(a["id"]))["status"] == const.NEW)
+        res = await client.post("/api/platega/callback", json={"id": tx, "status": "CONFIRMED"}, headers=genuine)
+        check("«оплачено» в уведомлении, а Platega говорит PENDING — не подтверждаем",
+              res.status == 200 and (await db.get_order(a["id"]))["status"] == const.NEW)
+
+        fake.statuses[tx] = "CONFIRMED"
+        bot.sent.clear()
+        res = await client.post("/api/platega/callback", json={"id": tx, "status": "CONFIRMED", "amount": 2700}, headers=genuine)
+        paid = await db.get_order(a["id"])
+        check("оплата подтверждена без продавца", res.status == 200 and paid["status"] == const.PAID, str(paid["status"]))
+        check("в заказе — транзакция Platega", paid["payment_ref"] == tx)
+        check("покупателю — «Оплата получена» и запрос UDID", any("Оплата получена" in t for t in bot.to(961)))
+        check("продавцу — «Оплата получена через Platega»",
+              any("Оплата получена через Platega" in t for t in bot.to(SELLER)), str(bot.to(SELLER))[:200])
+        bot.sent.clear()
+        res = await client.post("/api/platega/callback", json={"id": tx, "status": "CONFIRMED"}, headers=genuine)
+        check("повторное уведомление ничего не дублирует", res.status == 200 and not bot.to(SELLER) and not bot.to(961))
+        res = await client.post("/api/platega/callback", json={"id": "nope", "status": "CONFIRMED"}, headers=genuine)
+        check("незнакомая транзакция — 200, чтобы Platega не повторяла", res.status == 200)
+
+        res = await client.post("/api/platega/callback", headers=genuine, json={
+            "id": tx, "status": "PARTIALLY_REFUNDED", "amount": 2700, "refundAmount": 700, "refundId": "r1"})
+        check("частичный возврат — продавцу сообщение с суммой",
+              res.status == 200 and any("частичный возврат" in t and "700 ₽" in t for t in bot.to(SELLER)), str(bot.to(SELLER)))
+        check("заказ после возврата сам не меняется — решает продавец",
+              (await db.get_order(a["id"]))["status"] == const.PAID)
+
+        # Покупатель заплатил по старой ссылке, а цена с тех пор выросла.
+        b, _ = await svc.get_or_create_order(962)
+        await svc.apply_promo(b["id"], "PAY-10", 962)
+        old = await svc.payment_link(b["id"], 962)
+        await svc.remove_promo(b["id"], 962)
+        fake.statuses[old["url"].split("id=")[1]] = "CONFIRMED"
+        bot.sent.clear()
+        changed = await svc.poll_payments()
+        check("опрос нашёл оплату без уведомления", changed == 1)
+        check("оплачено меньше цены — не подтверждаем, продавцу предупреждение",
+              (await db.get_order(b["id"]))["status"] == const.NEW
+              and any("Оплачено меньше цены" in t for t in bot.to(SELLER)), str(bot.to(SELLER)))
+
+        c, _ = await svc.get_or_create_order(963)
+        c_link = await svc.payment_link(c["id"], 963)
+        me = {"X-Init-Data": make_init_data(963)}
+        res = await client.post("/api/order/platega/check", json={"orderId": c["id"]}, headers=me)
+        check("«Я оплатил — проверить», пока не оплачено", res.status == 200 and (await res.json())["order"]["status"] == "new")
+        fake.statuses[c_link["url"].split("id=")[1]] = "CONFIRMED"
+        res = await client.post("/api/order/platega/check", json={"orderId": c["id"]}, headers=me)
+        check("«Я оплатил — проверить» после оплаты — заказ оплачен",
+              res.status == 200 and (await res.json())["order"]["status"] == "paid")
+        res = await client.post("/api/order/platega/check", json={"orderId": c["id"]},
+                                headers={"X-Init-Data": make_init_data(964)})
+        check("чужой заказ не проверить", res.status == 400)
+
+        d, _ = await svc.get_or_create_order(964)
+        res = await client.post("/api/order/platega", json={"orderId": d["id"]}, headers={"X-Init-Data": make_init_data(964)})
+        data = await res.json()
+        check("API: ссылка на оплату для Mini App", res.status == 200 and data["url"].startswith("https://pay.platega.io/"), str(data))
+        d_tx = data["url"].split("id=")[1]
+        await svc.cancel(d["id"], "user:964", by_seller=False, actor_id=964)
+        fake.statuses[d_tx] = "CONFIRMED"
+        bot.sent.clear()
+        await svc.poll_payments()
+        check("оплатили уже отменённый заказ — продавцу предупреждение",
+              any("Оплата по отменённому заказу" in t for t in bot.to(SELLER)), str(bot.to(SELLER)))
+
+        fake.fail = True
+        e, _ = await svc.get_or_create_order(965)
+        check("Platega не отвечает — понятная ошибка покупателю",
+              await refused(svc.payment_link(e["id"], 965), "не ответил"))
+        res = await client.post("/api/platega/callback", json={"id": d_tx, "status": "CONFIRMED"}, headers=genuine)
+        check("Platega не отвечает на перепроверку — 503, Platega повторит", res.status == 503, str(res.status))
+        fake.fail = False
+
+        manual = OrderService(bot, replace(pcfg, payment_mode="manual"))
+        f, _ = await svc.get_or_create_order(966)
+        f = await manual.fresh_price(f)
+        check("вернули PAYMENT_MODE=manual — неоплаченный заказ платится переводом", f["payment_mode"] == "manual")
+        check("и ссылку Platega к нему уже не выдать", await refused(manual.payment_link(f["id"], 966), "переводом"))
+        check("реквизиты перевода снова в боте", "Сумма к оплате" in texts.payment_instructions(f, pcfg))
+        g, _ = await manual.get_or_create_order(967)
+        g = await svc.fresh_price(g)
+        check("и обратно на Platega — тоже на лету", g["payment_mode"] == "platega")
+        labels = [btn.callback_data for row in keyboards.buyer_order_kb(pcfg, g).inline_keyboard for btn in row]
+        check("в боте под заказом — «Оплатить»", "o:pay:%d" % g["id"] in labels, str(labels))
+    finally:
+        await client.close()
+        await server.close()
+
+    off = OrderService(FakeBot(), cfg)
+    res_app = build_app(cfg, FakeBot(), off)
+    client = TestClient(TestServer(res_app))
+    await client.start_server()
+    try:
+        res = await client.post("/api/platega/callback", json={"id": "x"}, headers={"X-MerchantId": "a", "X-Secret": "b"})
+        check("без ключей Platega адрес уведомлений закрыт", res.status == 404)
+    finally:
+        await client.close()
+
+    os.environ["PAYMENT_MODE"] = "platega"
+    try:
+        load_config()
+        check("PAYMENT_MODE=platega без ключей — понятная ошибка", False)
+    except SystemExit as exc:
+        check("PAYMENT_MODE=platega без ключей — понятная ошибка", "PLATEGA_MERCHANT_ID" in str(exc), str(exc))
+    finally:
+        os.environ["PAYMENT_MODE"] = "manual"
+
+
 class NoEffectBot(FakeBot):
     """Клиент, где эффекты сообщений не поддерживаются: Telegram отвечает 400."""
 
@@ -2150,6 +2322,9 @@ async def main() -> int:
     await db.close()
     await db.init(os.path.join(tmp, "expire.sqlite3"))
     await test_expire(cfg)
+    await db.close()
+    await db.init(os.path.join(tmp, "platega.sqlite3"))
+    await test_platega(cfg)
     await db.close()
     await db.init(os.path.join(tmp, "promocodes.sqlite3"))
     await test_promocodes(cfg)

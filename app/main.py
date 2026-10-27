@@ -108,6 +108,20 @@ async def keep_profile(bot: Bot, cfg: Config) -> None:
         await asyncio.sleep(PROFILE_CHECK)
 
 
+PAYMENTS_CHECK = 60  # секунд: так часто спрашиваем Platega о свежих неоплаченных ссылках
+
+
+async def keep_payments(service: OrderService) -> None:
+    """Подстраховка уведомлений Platega: если уведомление не дошло (бот
+    перезапускался, сеть мигнула), оплату всё равно увидим в течение минуты."""
+    while True:
+        try:
+            await service.poll_payments()
+        except Exception:
+            log.exception("Опрос Platega не прошёл — попробуем на следующей проверке")
+        await asyncio.sleep(PAYMENTS_CHECK)
+
+
 EXPIRE_CHECK = 600  # секунд: так часто ищем неоплаченные заказы, которым пора напомнить или отмениться
 
 
@@ -232,7 +246,11 @@ async def run() -> None:
     me = await connect_telegram(bot, cfg)
     # Гостю витрины в браузере показываем кнопку «Открыть бота» — нужен юзернейм.
     app["bot_username"] = me.username or cfg.bot_username
+    # После оплаты Platega возвращает покупателя в чат бота.
+    service.bot_username = me.username or cfg.bot_username
     log.info("Бот @%s запущен, режим оплаты: %s", me.username, cfg.payment_mode)
+    if service.platega is not None:
+        log.info("Platega подключена: уведомления — POST /api/platega/callback")
     await setup_profile(bot, cfg)
 
     stop = asyncio.Event()
@@ -248,6 +266,7 @@ async def run() -> None:
     )
     profile = asyncio.create_task(keep_profile(bot, cfg))
     expiring = asyncio.create_task(keep_expiring(service))
+    payments = asyncio.create_task(keep_payments(service))
     waiter = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait({polling, waiter}, return_when=asyncio.FIRST_COMPLETED)
@@ -256,6 +275,7 @@ async def run() -> None:
         waiter.cancel()
         profile.cancel()
         expiring.cancel()
+        payments.cancel()
         if not polling.done():
             await dp.stop_polling()
             await asyncio.gather(polling, return_exceptions=True)

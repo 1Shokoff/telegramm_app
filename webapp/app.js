@@ -319,6 +319,7 @@ function viewCheckout() {
     manual: 'Перевод с подтверждением',
     demo: 'Демо · без списания',
     stars: 'Telegram Stars ⭐',
+    platega: 'СБП, карта или SberPay',
   }[b.payment.mode];
 
   const app = state.checkoutApp ? appBySlug(state.checkoutApp) : null;
@@ -504,9 +505,14 @@ function viewPayment(order) {
       '<div class="cta-note">Без списания денег</div>';
   } else if (mode === 'stars') {
     action = '<button class="btn btn-primary" data-action="pay-stars">Оплатить ' + (b.payment.stars || '') + ' ⭐</button>';
+  } else if (mode === 'platega') {
+    action = plategaBlock(order);
   } else {
     action = proofBlock();
   }
+  let details = '<div class="notice">' + esc(order.hint) + '</div>';
+  if (mode === 'manual') details = paymentDetails(order);
+  else if (mode === 'platega') details = '<div class="requisites">' + amountRow(order, false) + '</div>';
 
   return (
     stepper(1) +
@@ -515,7 +521,7 @@ function viewPayment(order) {
       priceHtml(order.priceText, orderOldPrice(order)) + '</p>' +
     '<div class="card">' +
       orderPromoSection(order) +
-      (mode === 'manual' ? paymentDetails(order) : '<div class="notice">' + esc(order.hint) + '</div>') +
+      details +
       action +
     '</div>' +
     '<button class="btn btn-danger btn-sm" data-action="order-cancel">Отменить заказ</button>'
@@ -544,10 +550,13 @@ function paymentDetails(order) {
   );
 }
 
-function amountRow(order) {
+/* transfer — оплата переводом: сумму копируют в банк. Через Platega сумму
+   вводить не нужно — она уже на странице оплаты, и PAY_AMOUNT к ней не относится. */
+function amountRow(order, transfer) {
+  const byTransfer = transfer !== false;
   // Сумма из .env важнее цены заказа: продавец может попросить другую.
   // Но о промокоде она не знает — с ним платят цену заказа.
-  const fixed = !order.promoActive && state.boot.payment && state.boot.payment.amount;
+  const fixed = byTransfer && !order.promoActive && state.boot.payment && state.boot.payment.amount;
   const text = fixed || order.priceText;
   const sale = fixed ? null : orderPromo(order);
   const parts = [];
@@ -560,8 +569,19 @@ function amountRow(order) {
         '<span class="req-value">' + esc(text) + '</span>' +
         (parts.length ? '<span class="req-note">Скидка уже учтена: ' + esc(parts.join(' и ')) + '</span>' : '') +
       '</span>' +
-      copyButton('amount', 'сумму') +
+      (byTransfer ? copyButton('amount', 'сумму') : '') +
     '</div>'
+  );
+}
+
+/* Оплата через Platega: кнопка открывает её страницу (СБП, карта, SberPay),
+   подтверждение приходит само. «Проверить» — если вернулись, а статус старый. */
+function plategaBlock(order) {
+  return (
+    '<button class="btn btn-primary mt" data-action="pay-platega">💳 Оплатить ' + esc(order.priceText) + '</button>' +
+    '<button class="btn btn-secondary mt" data-action="pay-check">🔄 Я оплатил — проверить</button>' +
+    '<div class="cta-note">Откроется страница Platega: СБП, банковская карта или SberPay на выбор. ' +
+      'Чек пришлёт Platega, подтверждение оплаты — бот, обычно за минуту.</div>'
   );
 }
 
@@ -2859,6 +2879,29 @@ async function guard(fn) {
   }
 }
 
+/* Статус оплаты через Platega — у самой Platega, не дожидаясь её уведомления.
+   loud — по кнопке: сказать и «пока не поступила»; без неё молчим, пока не оплачено. */
+async function checkPlategaPayment(loud) {
+  const order = state.boot && state.boot.order;
+  if (!order || order.status !== 'new' || order.paymentMode !== 'platega') return;
+  const data = await api('/api/order/platega/check', { method: 'POST', body: { orderId: order.id } });
+  state.boot.order = data.order;
+  if (data.order.status !== 'new') {
+    state.plategaOpenedAt = 0;
+    toast('Оплата получена');
+    render();
+  } else if (loud) {
+    toast('Оплата пока не поступила. Если уже оплатили — подождите минуту');
+  }
+}
+
+/* Покупатель вернулся из банка в Mini App — сразу узнаём, прошла ли оплата. */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !state.plategaOpenedAt) return;
+  if (Date.now() - state.plategaOpenedAt > 30 * 60 * 1000) { state.plategaOpenedAt = 0; return; }
+  guard(() => checkPlategaPayment(false));
+});
+
 async function refreshOrder() {
   const data = await api('/api/order');
   state.boot.order = data.order;
@@ -2956,6 +2999,18 @@ const actions = {
     state.boot.order = data.order;
     toast('Оплата имитирована');
     render();
+  }),
+
+  'pay-platega': () => guard(async () => {
+    const data = await api('/api/order/platega', { method: 'POST', body: { orderId: state.boot.order.id } });
+    // Вернётся из банка — статус проверим сами (см. visibilitychange).
+    state.plategaOpenedAt = Date.now();
+    if (tg && tg.openLink) tg.openLink(data.url);
+    else window.open(data.url, '_blank');
+  }),
+
+  'pay-check': () => guard(async () => {
+    await checkPlategaPayment(true);
   }),
 
   'pay-stars': () => guard(async () => {
